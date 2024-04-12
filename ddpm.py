@@ -51,6 +51,30 @@ class MLP(nn.Module):
         return x
 
 
+class EnergyMLP(nn.Module):
+    def __init__(self, energy_form='L2', *args, **kwargs):
+        super().__init__()
+        self.mlp = MLP(*args, **kwargs)
+        self.energy_form = energy_form
+
+    def energy(self, x, t):
+        if self.energy_form == 'salimans':
+            return -0.5 * ((x - self.mlp(x, t)) ** 2).sum(dim=-1)
+        elif self.energy_form == 'L2':
+            return -0.5 * (self.mlp(x, t) ** 2).sum(dim=-1)
+        elif self.energy_form == 'inner_product':
+            return (x * self.mlp(x, t)).sum(dim=-1)
+        else:
+            raise NotImplementedError
+
+    def forward(self, x, t):
+        # take the derivative of the energy
+        x = x.clone().detach().requires_grad_(True)
+        energy = self.energy(x, t)
+        grad = torch.autograd.grad(energy.sum(), x, create_graph=True)[0]
+        return grad
+
+
 class NoiseScheduler():
     def __init__(self,
                  num_timesteps=1000,
@@ -167,7 +191,7 @@ if __name__ == "__main__":
         num_timesteps=config.num_timesteps,
         beta_schedule=config.beta_schedule)
 
-    optimizer = torch.optim.AdamW(
+    optimizer = torch.optim.Adam(
         model.parameters(),
         lr=config.learning_rate,
     )

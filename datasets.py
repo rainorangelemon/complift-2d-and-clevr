@@ -62,8 +62,8 @@ def composition_product_1_dataset(n=8000):
     X = []
     for i in range(n_gaussians):
         theta = 2 * np.pi * i / n_gaussians
-        x = rng.normal(0.5 * np.cos(theta), 0.3, n_samples_per_gaussian)
-        y = rng.normal(0.5 * np.sin(theta), 0.3, n_samples_per_gaussian)
+        x = rng.normal(0.5 * np.cos(theta), 0.03, n_samples_per_gaussian)
+        y = rng.normal(0.5 * np.sin(theta), 0.03, n_samples_per_gaussian)
         X.append(np.stack((x, y), axis=1))
     
     X = np.concatenate(X)
