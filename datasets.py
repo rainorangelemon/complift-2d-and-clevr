@@ -5,6 +5,7 @@ import torch
 from sklearn.datasets import make_moons
 from torch.utils.data import TensorDataset
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def moons_dataset(n=8000):
     X, _ = make_moons(n_samples=n, random_state=42, noise=0.03)
@@ -56,14 +57,13 @@ def dino_dataset(n=8000):
 
 def composition_product_1_dataset(n=8000):
     # mixture of gaussians, a GMM of 8 Gaussians in a ring of radius 0.5 around the origin, with each Gaussian having a standard deviation of 0.3
-    rng = np.random.default_rng(42)
     n_gaussians = 8
     n_samples_per_gaussian = n // n_gaussians
     X = []
     for i in range(n_gaussians):
         theta = 2 * np.pi * i / n_gaussians
-        x = rng.normal(0.5 * np.cos(theta), 0.03, n_samples_per_gaussian)
-        y = rng.normal(0.5 * np.sin(theta), 0.03, n_samples_per_gaussian)
+        x = np.random.normal(0.5 * np.cos(theta), 0.03, n_samples_per_gaussian)
+        y = np.random.normal(0.5 * np.sin(theta), 0.03, n_samples_per_gaussian)
         X.append(np.stack((x, y), axis=1))
     
     X = np.concatenate(X)
@@ -72,9 +72,8 @@ def composition_product_1_dataset(n=8000):
 
 def composition_product_2_dataset(n=8000):
     # a uniform distribution of points with x between -0.1 and 0.1 and y between -1 and 1
-    rng = np.random.default_rng(42)
-    x = rng.uniform(-0.1, 0.1, n)
-    y = rng.uniform(-1, 1, n)
+    x = np.random.uniform(-0.1, 0.1, n)
+    y = np.random.uniform(-1, 1, n)
     X = np.stack((x, y), axis=1)
     return TensorDataset(torch.from_numpy(X.astype(np.float32)))
 
@@ -89,6 +88,8 @@ def get_dataset(name, n=8000):
         "composition_product_2": composition_product_2_dataset,
     }
     if name in dataset_mapping:
-        return dataset_mapping[name](n)
+        dataset = dataset_mapping[name](n)
+        dataset.tensors = (dataset.tensors[0].to(device),)
+        return dataset
     else:
         raise ValueError(f"Unknown dataset: {name}")

@@ -13,6 +13,7 @@ import numpy as np
 import datasets
 from positional_embeddings import PositionalEmbedding
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Block(nn.Module):
     def __init__(self, size: int):
@@ -68,10 +69,48 @@ class EnergyMLP(nn.Module):
             raise NotImplementedError
 
     def forward(self, x, t):
-        # take the derivative of the energy
-        x = x.clone().detach().requires_grad_(True)
-        energy = self.energy(x, t)
-        grad = torch.autograd.grad(energy.sum(), x, create_graph=True)[0]
+        # check whether torch.autograd is enabled
+        with torch.autograd.enable_grad():
+            # take the derivative of the energy
+            x = x.clone().detach().requires_grad_(True)
+            energy = self.energy(x, t)
+            grad = torch.autograd.grad(energy.sum(), x, create_graph=True)[0]
+        # print(x.max(), energy.shape, energy.max(), grad.shape, grad.max(), x[(grad.abs().sum(-1).argmax())])
+        if not torch.is_grad_enabled():
+            grad = grad.detach()
+        return grad
+
+
+class CompositionEnergyMLP(nn.Module):
+    def __init__(self, *models, algebra='product'):
+        super().__init__()
+        self.models = nn.ModuleList(models)
+        self.algebra = algebra
+
+    def energy(self, x, t):
+        energies = [model.energy(x, t) for model in self.models]
+        if self.algebra == 'product':
+            result = torch.sum(torch.stack(energies), dim=0)
+        elif self.algebra == 'sum':
+            result = torch.logsumexp(torch.stack(energies), dim=0)
+        elif self.algebra == 'subtract':
+            energies[-1] = -energies[-1]
+            result = torch.logsumexp(torch.stack(energies), dim=0)
+        else:
+            raise NotImplementedError
+        return result
+
+    def forward(self, x, t):
+        # check whether torch.autograd is enabled
+        with torch.autograd.enable_grad():
+            # take the derivative of the energy
+            x = x.clone().detach().requires_grad_(True)
+            energy = self.energy(x, t)
+            grad = torch.autograd.grad(energy.sum(), x, create_graph=True)[0]
+        print(x.max(), energy.shape, energy.max(), grad.shape, grad.max(), x[(grad.abs().sum(-1).argmax())])
+        if not torch.is_grad_enabled():
+            grad = grad.detach()
+        print('composition', grad.shape)
         return grad
 
 
@@ -109,17 +148,19 @@ class NoiseScheduler():
         self.posterior_mean_coef2 = (1. - self.alphas_cumprod_prev) * torch.sqrt(self.alphas) / (1. - self.alphas_cumprod)
 
     def reconstruct_x0(self, x_t, t, noise):
+        t = t.to(self.sqrt_inv_alphas_cumprod.device)
         s1 = self.sqrt_inv_alphas_cumprod[t]
         s2 = self.sqrt_inv_alphas_cumprod_minus_one[t]
-        s1 = s1.reshape(-1, 1)
-        s2 = s2.reshape(-1, 1)
+        s1 = s1.reshape(-1, 1).to(x_t.device)
+        s2 = s2.reshape(-1, 1).to(x_t.device)
         return s1 * x_t - s2 * noise
 
     def q_posterior(self, x_0, x_t, t):
+        t = t.to(self.posterior_mean_coef1.device)
         s1 = self.posterior_mean_coef1[t]
         s2 = self.posterior_mean_coef2[t]
-        s1 = s1.reshape(-1, 1)
-        s2 = s2.reshape(-1, 1)
+        s1 = s1.reshape(-1, 1).to(x_t.device)
+        s2 = s2.reshape(-1, 1).to(x_t.device)
         mu = s1 * x_0 + s2 * x_t
         return mu
 
@@ -134,6 +175,7 @@ class NoiseScheduler():
     def step(self, model_output, timestep, sample):
         t = timestep
         pred_original_sample = self.reconstruct_x0(sample, t, model_output)
+        pred_original_sample = pred_original_sample.clamp(-1, 1)
         pred_prev_sample = self.q_posterior(pred_original_sample, sample, t)
 
         variance = 0
@@ -146,11 +188,16 @@ class NoiseScheduler():
         return pred_prev_sample
 
     def add_noise(self, x_start, x_noise, timesteps):
+
+        timesteps = timesteps.to(self.sqrt_alphas_cumprod.device)
         s1 = self.sqrt_alphas_cumprod[timesteps]
         s2 = self.sqrt_one_minus_alphas_cumprod[timesteps]
 
         s1 = s1.reshape(-1, 1)
         s2 = s2.reshape(-1, 1)
+
+        s1 = s1.to(x_start.device)
+        s2 = s2.to(x_start.device)
 
         return s1 * x_start + s2 * x_noise
 
@@ -162,12 +209,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment_name", type=str, default="base")
     parser.add_argument("--dataset", type=str, default="dino")
-    parser.add_argument("--train_batch_size", type=int, default=32)
+    parser.add_argument("--train_batch_size", type=int, default=128)
     parser.add_argument("--eval_batch_size", type=int, default=1000)
     parser.add_argument("--num_epochs", type=int, default=200)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--num_timesteps", type=int, default=50)
     parser.add_argument("--beta_schedule", type=str, default="linear", choices=["linear", "quadratic"])
+    parser.add_argument("--mlp_type", type=str, default="mlp", choices=["energy", "mlp"])
     parser.add_argument("--embedding_size", type=int, default=128)
     parser.add_argument("--hidden_size", type=int, default=128)
     parser.add_argument("--hidden_layers", type=int, default=3)
@@ -176,16 +224,20 @@ if __name__ == "__main__":
     parser.add_argument("--save_images_step", type=int, default=1)
     config = parser.parse_args()
 
-    dataset = datasets.get_dataset(config.dataset)
-    dataloader = DataLoader(
-        dataset, batch_size=config.train_batch_size, shuffle=True, drop_last=True)
+    # set seed
+    torch.manual_seed(0)
+    np.random.seed(0)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(0)
 
-    model = MLP(
+    model = {'energy': EnergyMLP, 'mlp': MLP}[config.mlp_type](
         hidden_size=config.hidden_size,
         hidden_layers=config.hidden_layers,
         emb_size=config.embedding_size,
         time_emb=config.time_embedding,
         input_emb=config.input_embedding)
+    
+    model.to(device)
 
     noise_scheduler = NoiseScheduler(
         num_timesteps=config.num_timesteps,
@@ -201,15 +253,19 @@ if __name__ == "__main__":
     losses = []
     print("Training model...")
     for epoch in range(config.num_epochs):
+        dataset = datasets.get_dataset(config.dataset)
+        dataloader = DataLoader(
+            dataset, batch_size=config.train_batch_size, shuffle=True)
         model.train()
         progress_bar = tqdm(total=len(dataloader))
         progress_bar.set_description(f"Epoch {epoch}")
         for step, batch in enumerate(dataloader):
             batch = batch[0]
-            noise = torch.randn(batch.shape)
+            batch = batch.to(device)
+            noise = torch.randn_like(batch)
             timesteps = torch.randint(
                 0, noise_scheduler.num_timesteps, (batch.shape[0],)
-            ).long()
+            ).long().to(device)
 
             noisy = noise_scheduler.add_noise(batch, noise, timesteps)
             noise_pred = model(noisy, timesteps)
@@ -221,7 +277,7 @@ if __name__ == "__main__":
             optimizer.zero_grad()
 
             progress_bar.update(1)
-            logs = {"loss": loss.detach().item(), "step": global_step}
+            logs = {"loss": loss.detach().item(), "step": global_step, "max_predict": noise_pred.max().item()}
             losses.append(loss.detach().item())
             progress_bar.set_postfix(**logs)
             global_step += 1
@@ -230,14 +286,14 @@ if __name__ == "__main__":
         if epoch % config.save_images_step == 0 or epoch == config.num_epochs - 1:
             # generate data with the model to later visualize the learning process
             model.eval()
-            sample = torch.randn(config.eval_batch_size, 2)
+            sample = torch.randn(config.eval_batch_size, 2).to(device)
             timesteps = list(range(len(noise_scheduler)))[::-1]
             for i, t in enumerate(tqdm(timesteps)):
-                t = torch.from_numpy(np.repeat(t, config.eval_batch_size)).long()
+                t = torch.from_numpy(np.repeat(t, config.eval_batch_size)).long().to(device)
                 with torch.no_grad():
                     residual = model(sample, t)
                 sample = noise_scheduler.step(residual, t[0], sample)
-            frames.append(sample.numpy())
+            frames.append(sample.cpu().numpy())
 
     print("Saving model...")
     outdir = f"exps/{config.experiment_name}"

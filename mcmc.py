@@ -1,22 +1,24 @@
 import numpy as np
+np.seterr(invalid='raise')
 
 
 def leapfrog(x, p, epsilon, L, grad_logp):
-    x_new = x
+    x_new = np.copy(x)
     p_new = p
     for i in range(L):
+        print('before leafrog', x_new.shape, p_new.shape)
         p_new += 0.5 * epsilon * grad_logp(x_new)
         x_new += epsilon * p_new
         p_new += 0.5 * epsilon * grad_logp(x_new)
+        print('after leafrog', x_new.shape, p_new.shape)
     return x_new, p_new
 
 
 # one step of the HMC sampler
-def hmc(logp, grad_logp, x0, epsilon, L):
-    n_samples, n_params = x0.shape
-    x = np.zeros((n_samples, n_params))
-    x = x0
+def hmc(logp, grad_logp, x, epsilon, L):
+    n_samples, n_params = x.shape
     p = np.random.randn(n_samples, n_params)
+    print('hmc', x.shape, p.shape)
     x_new, p_new = leapfrog(x, p, epsilon, L, grad_logp)
     new_energy = -logp(x_new) + 0.5 * np.sum(p_new**2, axis=1)
     old_energy = -logp(x) + 0.5 * np.sum(p**2, axis=1)
