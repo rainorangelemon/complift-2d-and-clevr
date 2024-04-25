@@ -107,10 +107,10 @@ class CompositionEnergyMLP(nn.Module):
             x = x.clone().detach().requires_grad_(True)
             energy = self.energy(x, t)
             grad = torch.autograd.grad(energy.sum(), x, create_graph=True)[0]
-        print(x.max(), energy.shape, energy.max(), grad.shape, grad.max(), x[(grad.abs().sum(-1).argmax())])
+        # print(x.max(), energy.shape, energy.max(), grad.shape, grad.max(), x[(grad.abs().sum(-1).argmax())])
         if not torch.is_grad_enabled():
             grad = grad.detach()
-        print('composition', grad.shape)
+        # print('composition', grad.shape)
         return grad
 
 
