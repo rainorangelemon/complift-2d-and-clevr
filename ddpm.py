@@ -6,63 +6,73 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+from copy import deepcopy
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 import datasets
 from positional_embeddings import PositionalEmbedding
+import wandb
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Block(nn.Module):
-    def __init__(self, size: int):
+    def __init__(self, size: int, widen_factor: int = 2):
         super().__init__()
 
-        self.ff = nn.Linear(size, size)
-        self.act = nn.GELU()
+        self.ff = nn.Linear(size, size * widen_factor)
+        self.ff_emb = nn.Linear(size, size * widen_factor)
+        self.ff_in = nn.Linear(size * widen_factor, size * widen_factor)
+        self.ff_out = nn.Linear(size * widen_factor, size)
+        self.ln = nn.LayerNorm(size)
+        self.act = nn.SiLU()
 
-    def forward(self, x: torch.Tensor):
-        return x + self.act(self.ff(x))
+    def forward(self, x: torch.Tensor, emb: torch.Tensor):
+        h = self.ff(self.act(self.ln(x)))
+        h += self.ff_emb(emb)
+        h = self.act(h)
+        h = self.ff_out(self.act(self.ff_in(h)))
+        return x + h
 
 
 class MLP(nn.Module):
-    def __init__(self, hidden_size: int = 128, hidden_layers: int = 3, emb_size: int = 128,
-                 time_emb: str = "sinusoidal", input_emb: str = "sinusoidal"):
+    def __init__(self, hidden_size: int = 128, hidden_layers: int = 4, emb_size: int = 128,
+                 time_emb: str = "learnable", input_emb: str = "identity"):
         super().__init__()
 
-        self.time_mlp = PositionalEmbedding(emb_size, time_emb)
-        self.input_mlp1 = PositionalEmbedding(emb_size, input_emb, scale=25.0)
-        self.input_mlp2 = PositionalEmbedding(emb_size, input_emb, scale=25.0)
+        if time_emb != "learnable":
+            self.time_mlp = PositionalEmbedding(emb_size, time_emb)
+        else:
+            self.time_mlp = nn.Embedding(1000, emb_size)
+        self.input_mlp = nn.Linear(2, emb_size)
 
-        concat_size = len(self.time_mlp.layer) + \
-            len(self.input_mlp1.layer) + len(self.input_mlp2.layer)
-        layers = [nn.Linear(concat_size, hidden_size), nn.GELU()]
+        self.layers = torch.nn.ModuleList()
         for _ in range(hidden_layers):
-            layers.append(Block(hidden_size))
-        layers.append(nn.Linear(hidden_size, 2))
-        self.joint_mlp = nn.Sequential(*layers)
+            self.layers.append(Block(hidden_size))
+        
+        self.output_mlp = nn.Linear(hidden_size, 2)
 
     def forward(self, x, t):
-        x1_emb = self.input_mlp1(x[:, 0])
-        x2_emb = self.input_mlp2(x[:, 1])
+        x_emb = self.input_mlp(x)
         t_emb = self.time_mlp(t)
-        x = torch.cat((x1_emb, x2_emb, t_emb), dim=-1)
-        x = self.joint_mlp(x)
+        for layer in self.layers:
+            x_emb = layer(x_emb, t_emb)
+        x = self.output_mlp(x_emb)
         return x
 
 
 class EnergyMLP(nn.Module):
-    def __init__(self, energy_form='L2', *args, **kwargs):
+    def __init__(self, energy_form='salimans', *args, **kwargs):
         super().__init__()
         self.mlp = MLP(*args, **kwargs)
         self.energy_form = energy_form
 
     def energy(self, x, t):
         if self.energy_form == 'salimans':
-            return -0.5 * ((x - self.mlp(x, t)) ** 2).sum(dim=-1)
+            return ((x - self.mlp(x, t)) ** 2).sum(dim=-1)
         elif self.energy_form == 'L2':
-            return -0.5 * (self.mlp(x, t) ** 2).sum(dim=-1)
+            return (self.mlp(x, t) ** 2).sum(dim=-1)
         elif self.energy_form == 'inner_product':
             return (x * self.mlp(x, t)).sum(dim=-1)
         else:
@@ -101,17 +111,21 @@ class CompositionEnergyMLP(nn.Module):
         return result
 
     def forward(self, x, t):
-        # check whether torch.autograd is enabled
-        with torch.autograd.enable_grad():
-            # take the derivative of the energy
-            x = x.clone().detach().requires_grad_(True)
-            energy = self.energy(x, t)
-            grad = torch.autograd.grad(energy.sum(), x, create_graph=True)[0]
-        # print(x.max(), energy.shape, energy.max(), grad.shape, grad.max(), x[(grad.abs().sum(-1).argmax())])
-        if not torch.is_grad_enabled():
-            grad = grad.detach()
-        # print('composition', grad.shape)
-        return grad
+        if self.algebra == 'product':
+            scores = [model(x, t) for model in self.models]
+            return torch.sum(torch.stack(scores), dim=0)
+        else:
+            # check whether torch.autograd is enabled
+            with torch.autograd.enable_grad():
+                # take the derivative of the energy
+                x = x.clone().detach().requires_grad_(True)
+                energy = self.energy(x, t)
+                grad = torch.autograd.grad(energy.sum(), x, create_graph=True)[0]
+            # print(x.max(), energy.shape, energy.max(), grad.shape, grad.max(), x[(grad.abs().sum(-1).argmax())])
+            if not torch.is_grad_enabled():
+                grad = grad.detach()
+            # print('composition', grad.shape)
+            return grad
 
 
 class NoiseScheduler():
@@ -218,11 +232,13 @@ if __name__ == "__main__":
     parser.add_argument("--mlp_type", type=str, default="mlp", choices=["energy", "mlp"])
     parser.add_argument("--embedding_size", type=int, default=128)
     parser.add_argument("--hidden_size", type=int, default=128)
-    parser.add_argument("--hidden_layers", type=int, default=3)
-    parser.add_argument("--time_embedding", type=str, default="sinusoidal", choices=["sinusoidal", "learnable", "linear", "zero"])
-    parser.add_argument("--input_embedding", type=str, default="sinusoidal", choices=["sinusoidal", "learnable", "linear", "identity"])
+    parser.add_argument("--hidden_layers", type=int, default=4)
+    parser.add_argument("--time_embedding", type=str, default="learnable", choices=["sinusoidal", "learnable", "linear", "zero"])
+    parser.add_argument("--input_embedding", type=str, default="identity", choices=["sinusoidal", "learnable", "linear", "identity"])
     parser.add_argument("--save_images_step", type=int, default=1)
     config = parser.parse_args()
+
+    wandb.init(project="ddpm", name=config.experiment_name, config=config, entity='rainorangelemon')
 
     # set seed
     torch.manual_seed(0)
@@ -238,6 +254,8 @@ if __name__ == "__main__":
         input_emb=config.input_embedding)
     
     model.to(device)
+    ema_model = deepcopy(model)
+    ema_model.eval()
 
     noise_scheduler = NoiseScheduler(
         num_timesteps=config.num_timesteps,
@@ -276,8 +294,14 @@ if __name__ == "__main__":
             optimizer.step()
             optimizer.zero_grad()
 
+            # update ema model
+            for ema_param, param in zip(ema_model.parameters(), model.parameters()):
+                ema_param.data.mul_(0.999)
+                ema_param.data.add_(0.001 * param.data)
+
             progress_bar.update(1)
             logs = {"loss": loss.detach().item(), "step": global_step, "max_predict": noise_pred.max().item()}
+            wandb.log(logs)
             losses.append(loss.detach().item())
             progress_bar.set_postfix(**logs)
             global_step += 1
@@ -299,6 +323,9 @@ if __name__ == "__main__":
     outdir = f"exps/{config.experiment_name}"
     os.makedirs(outdir, exist_ok=True)
     torch.save(model.state_dict(), f"{outdir}/model.pth")
+
+    print("Saving EMA model...")
+    torch.save(ema_model.state_dict(), f"{outdir}/ema_model.pth")
 
     print("Saving images...")
     imgdir = f"{outdir}/images"
