@@ -63,40 +63,28 @@ class AnnealedMUHASampler:
         step_size = self._step_sizes[i]
         return leapfrog_step(x, v, lambda _x: self._gradient_function(_x, i), step_size, self._mass_diag_sqrt, self._num_leapfrog_steps)
 
+    @torch.no_grad()
     def sample(self, n_samples: int):
         x_k = self._initial_distribution.sample((n_samples,))
 
         v_dist = dist.MultivariateNormal(
-            loc=torch.zeros(x_k.shape[-1]),
-            covariance_matrix=torch.eye(x_k.shape[-1]) * self._mass_diag_sqrt)
+            loc=torch.zeros(x_k.shape[-1]).to(x_k.device),
+            covariance_matrix=torch.eye(x_k.shape[-1]).to(x_k.device) * self._mass_diag_sqrt)
 
         v_k = v_dist.sample((n_samples,))
 
         logw = -self._initial_distribution.log_prob(x_k)
 
-        accept_rate = torch.zeros((self._num_steps,))
+        accept_rate = torch.zeros((self._num_steps,)).to(x_k.device)
+        total_samples = torch.zeros((self._num_steps, x_k.shape[0], x_k.shape[1])).to(x_k.device)
         for i in range(self._total_steps):
             dist_ind = (i // self._num_samples_per_step) + 1
             eps = torch.randn_like(x_k)
-
-            # print('damping', self._damping_coeff)
-            # print('mass_diag_sqrt', self._mass_diag_sqrt)
 
             # resample momentum
             v_k_prime = v_k * self._damping_coeff + torch.sqrt((1. - self._damping_coeff**2) * torch.ones_like(v_k)) * eps * self._mass_diag_sqrt
             # advance samples
             x_k_next, v_k_next = self.leapfrog_step(x_k, v_k_prime, dist_ind)
-
-            # print('v_k', torch.isnan(v_k).sum())
-            # print('eps', torch.isnan(eps).sum())
-            # print('v_k_prime', torch.isnan(v_k_prime).sum())
-            # print('v_k_next', torch.isnan(v_k_next).sum())
-
-            # print('shape', v_k.shape, v_k_prime.shape, v_k_next.shape)
-            # print('v_k_is_nan', v_k[torch.where(torch.isnan(v_k_prime).sum(dim=-1))][0, :])
-            # print('v_k_is_nan', (v_k * self._damping_coeff)[torch.where(torch.isnan(v_k_prime).sum(dim=-1))][0, :])
-            # print('v_k_is_nan', (torch.sqrt((1. - self._damping_coeff**2) * torch.ones_like(v_k)) * eps * self._mass_diag_sqrt)[torch.where(torch.isnan(v_k_prime).sum(dim=-1))][0, :])
-            # print('v_k_is_nan', v_k_prime[torch.where(torch.isnan(v_k_prime).sum(dim=-1))][0, :])
 
             # compute change in density
             logp_v_p = v_dist.log_prob(v_k_prime)
@@ -109,7 +97,7 @@ class AnnealedMUHASampler:
             log_joint_next = logp_x_hat + logp_v
             # acceptance prob
             logp_accept = log_joint_next - log_joint_prev
-            u = torch.rand(x_k_next.shape[0])
+            u = torch.rand(x_k_next.shape[0]).to(x_k.device)
             accept = (u < torch.exp(logp_accept)).float()
             # update importance weights
             logw += (logp_x - logp_x_hat) * accept
@@ -117,9 +105,10 @@ class AnnealedMUHASampler:
             x_k = accept[:, None] * x_k_next + (1 - accept[:, None]) * x_k
             v_k = accept[:, None] * v_k_next + (1 - accept[:, None]) * v_k_prime
             accept_rate[dist_ind] += accept.mean()
+            total_samples[dist_ind] = x_k
         
         accept_rate /= self._num_samples_per_step
-        return x_k, logw, accept_rate
+        return total_samples, x_k, logw, accept_rate
 
 
 if __name__ == "__main__":
