@@ -122,39 +122,71 @@ if __name__ == "__main__":
     # Define the ring-like target distribution
     def ring_distribution(x):
         radius = jnp.sqrt(x[:, 0]**2 + x[:, 1]**2)
-        return jnp.exp(-0.5 * (radius - 1)**2)
+        return jnp.exp(-(radius - 1)**2 / 0.05)
 
     def energy_function(x, _):
-        log_prob = jnp.log(ring_distribution(x))
+        log_prob = jnp.log(ring_distribution(x)).sum()
         return log_prob
 
     # Define the gradient of the energy function
-    gradient_function = lambda x, _: grad(energy_function)(x, _)
+    def gradient_function(x, _):
+        return grad(energy_function)(x, _)
+    
+
+    # plot the gradient direction
+    import matplotlib.pyplot as plt
+    x = jnp.linspace(-2, 2, 100)
+    y = jnp.linspace(-2, 2, 100)
+    X, Y = jnp.meshgrid(x, y)
+    XY = jnp.stack([X, Y], axis=-1).reshape(-1, 2)
+    Z = ring_distribution(XY)
+    print(XY.shape, Z.shape)
+    X = X.reshape(-1)
+    Y = Y.reshape(-1)
+    Z = Z.reshape(-1, 1)
+    plt.contour(x, y, Z.reshape(100, 100))
+    # plt.quiver(X, Y, -XY[:, 0], -XY[:, 1], scale=10)
+    plt.title('Gradient of Ring-Like Distribution')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.xlim(-2, 2)
+    plt.ylim(-2, 2)
+    plt.axis('equal')
+    plt.savefig('gradient.png')
 
     # Define the parameters for the AnnealedMUHASampler
-    num_steps = 1000
-    num_samples_per_step = 1000
-    step_sizes = jnp.ones(num_steps) * 0.03
-    damping_coeff = 0.5
-    mass_diag_sqrt = 1.0
-    num_leapfrog_steps = 3
-    initial_distribution = MultivariateNormalDiag(loc=jnp.zeros(2), scale_diag=jnp.ones(2))
-    target_distribution = ring_distribution
+    num_steps = 100
+    dim = 2
+    n_mode = 4
+    std = .05
+    init_std = 1.
+    init_mu = 0.
+    damping = .5
+    mass_diag_sqrt = 1.
+    num_leapfrog = 3
+    samples_per_step = 10
+    uha_step_size = .03
+    ula_step_size = .001
+    uha_step_sizes = jnp.ones((num_steps,)) * uha_step_size
+
+    batch_size = 1000    
+
+    initial_distribution = MultivariateNormalDiag(loc=jnp.zeros(dim) + init_mu, scale_diag=jnp.ones(dim) * init_std)
 
     # Create an instance of the AnnealedMUHASampler
     sampler = AnnealedMUHASampler(num_steps=num_steps,
-                                num_samples_per_step=num_samples_per_step,
-                                step_sizes=step_sizes,
-                                damping_coeff=damping_coeff,
+                                num_samples_per_step=samples_per_step,
+                                step_sizes=uha_step_sizes,
+                                damping_coeff=damping,
                                 mass_diag_sqrt=mass_diag_sqrt,
-                                num_leapfrog_steps=num_leapfrog_steps,
+                                num_leapfrog_steps=num_leapfrog,
                                 initial_distribution=initial_distribution,
                                 gradient_function=gradient_function,
                                 energy_function=energy_function)
 
     # Sample from the distribution using the sampler
     key = random.PRNGKey(123)
-    samples, log_weights, accept_rate = sampler.sample(key, n_samples=num_samples_per_step)
+    samples, log_weights, accept_rate = sampler.sample(key, n_samples=8000)
 
     # Visualize the samples if needed
     import matplotlib.pyplot as plt
