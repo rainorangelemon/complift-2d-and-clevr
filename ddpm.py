@@ -102,10 +102,12 @@ class CompositionEnergyMLP(nn.Module):
         if self.algebra == 'product':
             result = torch.sum(torch.stack(energies), dim=0)
         elif self.algebra == 'sum':
-            result = torch.logsumexp(torch.stack(energies), dim=0)
+            result = -torch.logsumexp(-3.5*torch.stack(energies), dim=0)
         elif self.algebra == 'subtract':
-            energies[-1] = -energies[-1]
-            result = torch.logsumexp(torch.stack(energies), dim=0)
+            energies = torch.stack(energies)
+            energies[-1] = -0.3 * energies[-1]
+            energies[:-1] = 1.3 * energies[:-1]
+            result = torch.sum(energies, dim=0)
         else:
             raise NotImplementedError
         return result
