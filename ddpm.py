@@ -101,9 +101,9 @@ class CompositionEnergyMLP(nn.Module):
         energies = [model.energy(x, t) for model in self.models]
         if self.algebra == 'product':
             result = torch.sum(torch.stack(energies), dim=0)
-        elif self.algebra == 'sum':
+        elif self.algebra == 'summation':
             result = -torch.logsumexp(-3.5*torch.stack(energies), dim=0)
-        elif self.algebra == 'subtract':
+        elif self.algebra == 'negation':
             energies = torch.stack(energies)
             energies[-1] = -0.3 * energies[-1]
             energies[:-1] = 1.3 * energies[:-1]

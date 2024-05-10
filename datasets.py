@@ -55,27 +55,86 @@ def dino_dataset(n=8000):
     return TensorDataset(torch.from_numpy(X.astype(np.float32)))
 
 
-def composition_product_1_dataset(n=8000):
+def gaussian_from_centers(centers, n_samples_per_center):
+    X = []
+    for i, center in enumerate(centers):
+        x = np.random.normal(center[0], 0.03, n_samples_per_center)
+        y = np.random.normal(center[1], 0.03, n_samples_per_center)
+        X.append(np.stack((x, y), axis=1))
+    X = np.concatenate(X)
+    X = TensorDataset(torch.from_numpy(X.astype(np.float32)))
+    return X
+
+
+def composition_product_a1_dataset(n=8000):
     # mixture of gaussians, a GMM of 8 Gaussians in a ring of radius 0.5 around the origin, with each Gaussian having a standard deviation of 0.3
     n_gaussians = 8
     n_samples_per_gaussian = n // n_gaussians
-    X = []
-    for i in range(n_gaussians):
-        theta = 2 * np.pi * i / n_gaussians
-        x = np.random.normal(0.5 * np.cos(theta), 0.03, n_samples_per_gaussian)
-        y = np.random.normal(0.5 * np.sin(theta), 0.03, n_samples_per_gaussian)
-        X.append(np.stack((x, y), axis=1))
-    
-    X = np.concatenate(X)
-    return TensorDataset(torch.from_numpy(X.astype(np.float32)))
+    centers = [[0.5 * np.cos(2 * np.pi * i / n_gaussians), 0.5 * np.sin(2 * np.pi * i / n_gaussians)] for i in range(n_gaussians)]
+    return gaussian_from_centers(centers, n_samples_per_gaussian)
 
 
-def composition_product_2_dataset(n=8000):
+def composition_product_a2_dataset(n=8000):
     # a uniform distribution of points with x between -0.1 and 0.1 and y between -1 and 1
     x = np.random.uniform(-0.1, 0.1, n)
     y = np.random.uniform(-1, 1, n)
     X = np.stack((x, y), axis=1)
     return TensorDataset(torch.from_numpy(X.astype(np.float32)))
+
+def composition_product_a3_dataset(n=8000):
+    # the target distribution
+    centers = [[0, 0.5], [0, -0.5]]
+    n_samples_per_center = n // len(centers)
+    X = gaussian_from_centers(centers, n_samples_per_center)
+    return X
+
+
+def composition_summation_a1_dataset(n=8000):
+    left_centers = [[-0.25, 0.5], [-0.25, 0.], [-0.25, -0.5]]
+    n_samples_per_center = n // len(left_centers)
+    X = gaussian_from_centers(left_centers, n_samples_per_center)
+    return X
+
+
+def composition_summation_a2_dataset(n=8000):
+    right_centers = [[0.25, 0.5], [0.25, 0.], [0.25, -0.5]]
+    n_samples_per_center = n // len(right_centers)
+    X = gaussian_from_centers(right_centers, n_samples_per_center)
+    return X
+
+def composition_summation_a3_dataset(n=8000):
+    centers = [[-0.25, 0.5], [-0.25, 0.], [-0.25, -0.5], [0.25, 0.5], [0.25, 0.], [0.25, -0.5]]
+    n_samples_per_center = n // len(centers)
+    X = gaussian_from_centers(centers, n_samples_per_center)
+    return X
+
+def composition_negation_a1_dataset(n=8000):
+    x = np.random.uniform(-1, 1, n)
+    y = np.random.uniform(-1, 1, n)
+    X = np.stack((x, y), axis=1)
+    return TensorDataset(torch.from_numpy(X.astype(np.float32)))
+
+def composition_negation_a2_dataset(n=8000):
+    x = np.random.uniform(-0.5, 0.5, n)
+    y = np.random.uniform(-0.5, 0.5, n)
+    X = np.stack((x, y), axis=1)
+    X = TensorDataset(torch.from_numpy(X.astype(np.float32)))
+    return X
+
+def composition_negation_a3_dataset(n=8000):
+    region1 = [[-1, -1], [-0.5, 0.5]]
+    region2 = [[-0.5, -1], [1, -0.5]]
+    region3 = [[-1, 0.5], [0.5, 1]]
+    region4 = [[0.5, -0.5], [1, 1]]
+    n_samples_per_region = n // 4
+    X = []
+    for region in [region1, region2, region3, region4]:
+        x = np.random.uniform(region[0][0], region[1][0], n_samples_per_region)
+        y = np.random.uniform(region[0][1], region[1][1], n_samples_per_region)
+        X.append(np.stack((x, y), axis=1))
+    X = np.concatenate(X)
+    X = TensorDataset(torch.from_numpy(X.astype(np.float32)))
+    return X
 
 
 def get_dataset(name, n=8000):
@@ -84,8 +143,15 @@ def get_dataset(name, n=8000):
         "dino": dino_dataset,
         "line": line_dataset,
         "circle": circle_dataset,
-        "composition_product_1": composition_product_1_dataset,
-        "composition_product_2": composition_product_2_dataset,
+        "product_a1": composition_product_a1_dataset,
+        "product_a2": composition_product_a2_dataset,
+        "product_a3": composition_product_a3_dataset,
+        "summation_a1": composition_summation_a1_dataset,
+        "summation_a2": composition_summation_a2_dataset,
+        "summation_a3": composition_summation_a3_dataset,
+        "negation_a1": composition_negation_a1_dataset,
+        "negation_a2": composition_negation_a2_dataset,
+        "negation_a3": composition_negation_a3_dataset,
     }
     if name in dataset_mapping:
         dataset = dataset_mapping[name](n)
@@ -93,3 +159,8 @@ def get_dataset(name, n=8000):
         return dataset
     else:
         raise ValueError(f"Unknown dataset: {name}")
+    
+
+def generate_data_points(n=8000, dataset="moons"):
+    dataset = get_dataset(dataset, n)
+    return dataset.tensors[0].cpu().numpy()    

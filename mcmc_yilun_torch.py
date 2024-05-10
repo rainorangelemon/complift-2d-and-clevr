@@ -2,6 +2,7 @@ import torch
 import torch.distributions as dist
 from typing import Callable, Optional, Tuple, Union, Dict
 import numpy as np
+from tqdm.auto import tqdm
 
 Array = torch.Tensor
 Scalar = Union[float, int]
@@ -77,7 +78,7 @@ class AnnealedMUHASampler:
 
         accept_rate = torch.zeros((self._num_steps,)).to(x_k.device)
         total_samples = torch.zeros((self._num_steps, x_k.shape[0], x_k.shape[1])).to(x_k.device)
-        for i in range(self._total_steps):
+        for i in tqdm(range(self._total_steps)):
             dist_ind = (i // self._num_samples_per_step) + 1
             eps = torch.randn_like(x_k)
 
@@ -195,4 +196,4 @@ if __name__ == "__main__":
     plt.xlim(-2, 2)
     plt.ylim(-2, 2)
     plt.axis('equal')
-    plt.savefig('samples.png')
+    plt.savefig('figures/samples.png')
