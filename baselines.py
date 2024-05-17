@@ -25,7 +25,7 @@ def diffusion_baseline(model_to_test, num_timesteps=50, eval_batch_size=8000):
     return samples
 
 
-def ebm_baseline(model_to_test, num_timesteps=50, eval_batch_size=8000):
+def ebm_baseline(model_to_test, num_timesteps=50, eval_batch_size=8000, temperature=1):
     
     noise_scheduler = ddpm.NoiseScheduler(num_timesteps=num_timesteps)
     device = ddpm.device
@@ -50,13 +50,13 @@ def ebm_baseline(model_to_test, num_timesteps=50, eval_batch_size=8000):
         t = num_steps - t - 1
         x = x.clone().to(device)
         t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
-        return -(model_to_test.energy(x, t_tensor)) / noise_scheduler.sqrt_one_minus_alphas_cumprod[t]
+        return -(model_to_test.energy(x, t_tensor)) * temperature / noise_scheduler.sqrt_one_minus_alphas_cumprod[t]
 
     def gradient_function(x, t):
         t = num_steps - t - 1
         x = x.clone().to(device)
         t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
-        return -(model_to_test(x, t_tensor)) / noise_scheduler.sqrt_one_minus_alphas_cumprod[t]
+        return -(model_to_test(x, t_tensor)) * temperature / noise_scheduler.sqrt_one_minus_alphas_cumprod[t]
 
     # Create an instance of the AnnealedMUHASampler
     sampler = AnnealedMUHASampler(num_steps=num_steps,
@@ -71,6 +71,17 @@ def ebm_baseline(model_to_test, num_timesteps=50, eval_batch_size=8000):
 
     total_samples, _, _, _ = sampler.sample(n_samples=eval_batch_size)
     return total_samples.cpu().numpy()
+
+
+def intermediate_distribution(data_points, num_timesteps=50, eval_batch_size=8000):
+    noise_scheduler = ddpm.NoiseScheduler(num_timesteps=num_timesteps)
+    device = ddpm.device
+    origin_data = torch.tensor(data_points).float().to(device)
+    intermediate_data_list = []
+    for i in range(num_timesteps):
+        intermediate_data = noise_scheduler.step(origin_data, i)
+        intermediate_data_list.append(intermediate_data.cpu().numpy())
+    return intermediate_data_list
 
 
 def evaluate_W2(generated_samples, target_samples):
