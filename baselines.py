@@ -79,9 +79,10 @@ def intermediate_distribution(data_points, num_timesteps=50, eval_batch_size=800
     origin_data = torch.tensor(data_points).float().to(device)
     intermediate_data_list = []
     for i in range(num_timesteps):
-        intermediate_data = noise_scheduler.step(origin_data, i)
+        noise = torch.randn_like(origin_data)
+        intermediate_data = noise_scheduler.add_noise(origin_data, noise, torch.ones(len(origin_data)).long().to(device) * i)
         intermediate_data_list.append(intermediate_data.cpu().numpy())
-    return intermediate_data_list
+    return intermediate_data_list[::-1] + [origin_data.cpu().numpy()]
 
 
 def evaluate_W2(generated_samples, target_samples):
