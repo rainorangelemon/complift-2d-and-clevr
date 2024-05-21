@@ -42,8 +42,6 @@ def ebm_baseline(model_to_test, num_timesteps=50, eval_batch_size=8000, temperat
     uha_step_size = .03
     uha_step_sizes = torch.ones((num_steps,)) * uha_step_size
 
-    eval_batch_size = 8000    
-
     initial_distribution = dist.MultivariateNormal(loc=torch.zeros(dim).to(device) + init_mu, covariance_matrix=torch.eye(dim).to(device) * init_std)
 
     def energy_function(x, t): 
