@@ -77,12 +77,10 @@ def ebm_baseline(model_to_test,
 
 def ebm_rejection_baseline(composed_model,
                            models, 
-                           thresholds, 
-                           algebra,
+                           intervals,
                            **kwargs):
     
     assert len(models) == 2
-    assert algebra in ['product', 'summation', 'negation']
     device = ddpm.device
     num_timesteps = kwargs.get('num_timesteps', 50)
     filter_ratios = []
@@ -94,12 +92,11 @@ def ebm_rejection_baseline(composed_model,
         x = torch.from_numpy(x_numpy).float().to(device)
         t_tensor = torch.from_numpy(np.repeat(t, len(x))).long().to(device)
         energies = [model.energy(x, t_tensor) for model in models]
-        if algebra == 'product':
-            need_to_remove = (energies[0] > thresholds[0][reverse_t]) | (energies[1] > thresholds[1][reverse_t])
-        elif algebra == 'summation':
-            need_to_remove = (energies[0] > thresholds[0][reverse_t]) & (energies[1] > thresholds[1][reverse_t])
-        elif algebra == 'negation':
-            need_to_remove = (energies[0] > thresholds[0][reverse_t]) | (energies[1] < thresholds[1][reverse_t])
+        interval_mins = [interval[reverse_t][0] for interval in intervals]
+        interval_maxs = [interval[reverse_t][1] for interval in intervals]
+        lower_than_min = [energy < interval_min for energy, interval_min in zip(energies, interval_mins)]
+        higher_than_max = [energy > interval_max for energy, interval_max in zip(energies, interval_maxs)]
+        need_to_remove = torch.stack(lower_than_min + higher_than_max).any(dim=0)
         need_to_remove = need_to_remove.cpu().numpy()
 
         filter_ratios.append(need_to_remove.sum() / len(x))

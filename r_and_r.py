@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from bootstrapping import bootstrapping_and_get_max
+from bootstrapping import bootstrapping_and_get_max, bootstrapping_and_get_interval
 from baselines import intermediate_distribution
 from ddpm import device
 
@@ -24,3 +24,24 @@ def calculate_threshold_multiple_timesteps(samples, model, confidence=0.999):
         extreme_values.append(extreme_value)
     
     return extreme_values
+
+
+def calculate_interval(samples, model, confidence=0.999):
+    # calculate the level-set values
+    with torch.no_grad():
+        energy_on_data = model.energy(torch.from_numpy(samples).to(device), torch.zeros(len(samples)).long().to(device))
+    extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy(), confidence=confidence)
+    return extreme_value_l, extreme_value_r
+
+
+def calculate_interval_multiple_timesteps(samples, model, confidence=0.999):
+    intermediate_samples = intermediate_distribution(samples)[1:]  # ignore the initial Gaussian distribution
+    intervals = []
+    for t, samples_t in zip(range(len(intermediate_samples)-1, -1, -1), intermediate_samples):
+        # calculate the level-set values
+        with torch.no_grad():
+            energy_on_data = model.energy(torch.from_numpy(samples_t).to(device), t+torch.zeros(len(samples)).long().to(device))
+        extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy(), confidence=confidence)
+        intervals.append((extreme_value_l, extreme_value_r))
+
+    return intervals
