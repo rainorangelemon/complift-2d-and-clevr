@@ -57,15 +57,14 @@ class AnnealedMUHASampler:
         self._gradient_function = gradient_function
         self._energy_function = energy_function
 
-        self._total_steps = self._num_samples_per_step * (self._num_steps - 1)
-        self._total_steps_reverse = self._num_samples_per_step * self._num_steps
+        self._total_steps = self._num_samples_per_step * self._num_steps
 
     def leapfrog_step(self, x, v, i):
         step_size = self._step_sizes[i]
         return leapfrog_step(x, v, lambda _x: self._gradient_function(_x, i), step_size, self._mass_diag_sqrt, self._num_leapfrog_steps)
 
     @torch.no_grad()
-    def sample(self, n_samples: int):
+    def sample(self, n_samples: int, callback=None):
         x_k = self._initial_distribution.sample((n_samples,))
 
         v_dist = dist.MultivariateNormal(
@@ -79,7 +78,7 @@ class AnnealedMUHASampler:
         accept_rate = torch.zeros((self._num_steps,)).to(x_k.device)
         total_samples = torch.zeros((self._num_steps, x_k.shape[0], x_k.shape[1])).to(x_k.device)
         for i in tqdm(range(self._total_steps)):
-            dist_ind = (i // self._num_samples_per_step) + 1
+            dist_ind = (i // self._num_samples_per_step)
             eps = torch.randn_like(x_k)
 
             # resample momentum
@@ -106,6 +105,10 @@ class AnnealedMUHASampler:
             x_k = accept[:, None] * x_k_next + (1 - accept[:, None]) * x_k
             v_k = accept[:, None] * v_k_next + (1 - accept[:, None]) * v_k_prime
             accept_rate[dist_ind] += accept.mean()
+
+            if callback is not None:
+                x_k = callback(x_k, dist_ind)
+
             total_samples[dist_ind] = x_k
         
         accept_rate /= self._num_samples_per_step

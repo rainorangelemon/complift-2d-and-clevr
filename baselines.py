@@ -25,7 +25,12 @@ def diffusion_baseline(model_to_test, num_timesteps=50, eval_batch_size=8000):
     return samples
 
 
-def ebm_baseline(model_to_test, num_timesteps=50, eval_batch_size=8000, temperature=1):
+def ebm_baseline(model_to_test, 
+                 num_timesteps=50, 
+                 eval_batch_size=8000, 
+                 temperature=1, 
+                 samples_per_step=10,
+                 callback=None):
     
     noise_scheduler = ddpm.NoiseScheduler(num_timesteps=num_timesteps)
     device = ddpm.device
@@ -38,20 +43,19 @@ def ebm_baseline(model_to_test, num_timesteps=50, eval_batch_size=8000, temperat
     damping = .5
     mass_diag_sqrt = 1.
     num_leapfrog = 3
-    samples_per_step = 10  # aka mcmc_per_step
     uha_step_size = .03
     uha_step_sizes = torch.ones((num_steps,)) * uha_step_size
 
     initial_distribution = dist.MultivariateNormal(loc=torch.zeros(dim).to(device) + init_mu, covariance_matrix=torch.eye(dim).to(device) * init_std)
 
     def energy_function(x, t): 
-        t = num_steps - t - 1
+        t = num_steps - 1 - t
         x = x.clone().to(device)
         t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
         return -(model_to_test.energy(x, t_tensor)) * temperature / noise_scheduler.sqrt_one_minus_alphas_cumprod[t]
 
     def gradient_function(x, t):
-        t = num_steps - t - 1
+        t = num_steps - 1 - t 
         x = x.clone().to(device)
         t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
         return -(model_to_test(x, t_tensor)) * temperature / noise_scheduler.sqrt_one_minus_alphas_cumprod[t]
@@ -65,10 +69,48 @@ def ebm_baseline(model_to_test, num_timesteps=50, eval_batch_size=8000, temperat
                                 num_leapfrog_steps=num_leapfrog,
                                 initial_distribution=initial_distribution,
                                 gradient_function=gradient_function,
-                                energy_function=energy_function)
+                                energy_function=energy_function,)
 
-    total_samples, _, _, _ = sampler.sample(n_samples=eval_batch_size)
+    total_samples, _, _, _ = sampler.sample(n_samples=eval_batch_size, callback=callback)
     return total_samples.cpu().numpy()
+
+
+def ebm_rejection_baseline(composed_model,
+                           models, 
+                           thresholds, 
+                           algebra,
+                           **kwargs):
+    
+    assert len(models) == 2
+    assert algebra in ['product', 'summation', 'negation']
+    device = ddpm.device
+    num_timesteps = kwargs.get('num_timesteps', 50)
+    filter_ratios = []
+
+    def callback(x, reverse_t):
+        t = num_timesteps - 1 - reverse_t
+        if isinstance(x, torch.Tensor):
+            x_numpy = x.cpu().numpy()
+        x = torch.from_numpy(x_numpy).float().to(device)
+        t_tensor = torch.from_numpy(np.repeat(t, len(x))).long().to(device)
+        energies = [model.energy(x, t_tensor) for model in models]
+        if algebra == 'product':
+            need_to_remove = (energies[0] > thresholds[0][reverse_t]) | (energies[1] > thresholds[1][reverse_t])
+        elif algebra == 'summation':
+            need_to_remove = (energies[0] > thresholds[0][reverse_t]) & (energies[1] > thresholds[1][reverse_t])
+        elif algebra == 'negation':
+            need_to_remove = (energies[0] > thresholds[0][reverse_t]) | (energies[1] < thresholds[1][reverse_t])
+        need_to_remove = need_to_remove.cpu().numpy()
+
+        filter_ratios.append(need_to_remove.sum() / len(x))
+        # repurpose
+        if need_to_remove.sum() != len(x):
+            x_numpy[need_to_remove] = x_numpy[~need_to_remove][np.random.choice(np.sum(~need_to_remove), need_to_remove.sum(), replace=True)]
+
+        return torch.from_numpy(x_numpy).float().to(device)
+
+    total_samples = ebm_baseline(composed_model, **kwargs, callback=callback)
+    return total_samples, filter_ratios
 
 
 def intermediate_distribution(data_points, num_timesteps=50, eval_batch_size=8000):
