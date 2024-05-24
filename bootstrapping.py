@@ -14,6 +14,9 @@ def bootstrapping_and_get_max(data, n=1000, confidence=0.999):
 
 
 def bootstrapping_and_get_interval(data, n=1000, confidence=0.999):
+    if len(data) == 0:
+        return [float('inf'), float('-inf')]
+
     rho = [data.min(), data.max()]
 
     samples = np.random.choice(data, size=len(data)*n, replace=True)

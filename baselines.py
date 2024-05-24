@@ -7,7 +7,10 @@ import torch.distributions as dist
 import ot
 
 
-def diffusion_baseline(model_to_test, num_timesteps=50, eval_batch_size=8000):
+def diffusion_baseline(model_to_test, 
+                       num_timesteps=50, 
+                       eval_batch_size=8000,
+                       callback=None):
     dim = 2
     device = ddpm.device
     model_to_test = model_to_test.to(device)
@@ -17,10 +20,13 @@ def diffusion_baseline(model_to_test, num_timesteps=50, eval_batch_size=8000):
 
     samples = []
     for i, t in enumerate(tqdm(timesteps)):
-        t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
-        with torch.no_grad():
-            residual = model_to_test(sample, t_tensor)
-        sample = noise_scheduler.step(residual, t_tensor[0], sample)
+        if len(sample) != 0:
+            t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
+            with torch.no_grad():
+                residual = model_to_test(sample, t_tensor)
+            sample = noise_scheduler.step(residual, t_tensor[0], sample)
+            if callback is not None:
+                sample = callback(sample, t)
         samples.append(sample.cpu().numpy())
     return samples
 
@@ -78,9 +84,11 @@ def ebm_baseline(model_to_test,
 def ebm_rejection_baseline(composed_model,
                            models, 
                            intervals,
+                           algebra,
                            **kwargs):
     
     assert len(models) == 2
+    assert algebra in ['product', 'summation', 'negation']
     device = ddpm.device
     num_timesteps = kwargs.get('num_timesteps', 50)
     filter_ratios = []
@@ -94,11 +102,14 @@ def ebm_rejection_baseline(composed_model,
         energies = [model.energy(x, t_tensor) for model in models]
         interval_mins = [interval[reverse_t][0] for interval in intervals]
         interval_maxs = [interval[reverse_t][1] for interval in intervals]
-        lower_than_min = [energy < interval_min for energy, interval_min in zip(energies, interval_mins)]
-        higher_than_max = [energy > interval_max for energy, interval_max in zip(energies, interval_maxs)]
-        need_to_remove = torch.stack(lower_than_min + higher_than_max).any(dim=0)
+        out_of_interval = [((energy < interval_min) | (energy > interval_max)) for energy, interval_min, interval_max in zip(energies, interval_mins, interval_maxs)]
+        if algebra == 'product':
+            need_to_remove = out_of_interval[0] | out_of_interval[1]
+        elif algebra == 'summation':
+            need_to_remove = out_of_interval[0] & out_of_interval[1]
+        elif algebra == 'negation':
+            need_to_remove = out_of_interval[0] | (~out_of_interval[1])
         need_to_remove = need_to_remove.cpu().numpy()
-
         filter_ratios.append(need_to_remove.sum() / len(x))
         # repurpose
         if need_to_remove.sum() != len(x):
@@ -108,6 +119,49 @@ def ebm_rejection_baseline(composed_model,
 
     total_samples = ebm_baseline(composed_model, **kwargs, callback=callback)
     return total_samples, filter_ratios
+
+
+def diffusion_rejection_baseline(composed_model,
+                                 models, 
+                                 intervals,
+                                 algebra,
+                                 **kwargs):
+    assert len(models) == 2
+    assert algebra in ['product', 'summation', 'negation']
+    device = ddpm.device    
+    num_timesteps = kwargs.get('num_timesteps', 50)
+    filter_ratios = []
+
+    def callback(x, t):
+        reverse_t = num_timesteps - 1 - t
+        if isinstance(x, torch.Tensor):
+            x_numpy = x.cpu().numpy()
+        x = torch.from_numpy(x_numpy).float().to(device)
+        t_tensor = torch.from_numpy(np.repeat(t, len(x))).long().to(device)
+        energies = [model.energy(x, t_tensor) for model in models]
+        interval_mins = [interval[reverse_t][0] for interval in intervals]
+        interval_maxs = [interval[reverse_t][1] for interval in intervals]
+        out_of_interval = [((energy < interval_min) | (energy > interval_max)) for energy, interval_min, interval_max in zip(energies, interval_mins, interval_maxs)]
+        if algebra == 'product':
+            need_to_remove = out_of_interval[0] | out_of_interval[1]
+        elif algebra == 'summation':
+            need_to_remove = out_of_interval[0] & out_of_interval[1]
+        elif algebra == 'negation':
+            need_to_remove = out_of_interval[0] | (~out_of_interval[1])
+        need_to_remove = need_to_remove.cpu().numpy()
+        filter_ratios.append(need_to_remove.sum() / len(x))
+        # repurpose
+        if need_to_remove.sum() != len(x):
+            x_numpy[need_to_remove] = x_numpy[~need_to_remove][np.random.choice(np.sum(~need_to_remove), need_to_remove.sum(), replace=True)]
+        else:
+            x_numpy = np.empty((0, x_numpy.shape[1]))
+
+        return torch.from_numpy(x_numpy).float().to(device)
+    
+    
+    total_samples = diffusion_baseline(composed_model, **kwargs, callback=callback)
+    return total_samples, filter_ratios
+
 
 
 def intermediate_distribution(data_points, num_timesteps=50, eval_batch_size=8000):

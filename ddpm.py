@@ -191,7 +191,7 @@ class NoiseScheduler():
     def step(self, model_output, timestep, sample):
         t = timestep
         pred_original_sample = self.reconstruct_x0(sample, t, model_output)
-        pred_original_sample = pred_original_sample.clamp(-1, 1)
+        # pred_original_sample = pred_original_sample.clamp(-1, 1)
         pred_prev_sample = self.q_posterior(pred_original_sample, sample, t)
 
         variance = 0
