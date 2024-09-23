@@ -1,4 +1,5 @@
 from PIL import Image
+from time import perf_counter
 
 
 def merge_pic(image_paths, column, row, save_path):
@@ -34,3 +35,17 @@ def merge_pic_in_a_row(image_paths, save_path):
         offset += im.size[0]
 
     new_im.save(save_path)
+
+
+class catchtime:
+    def __init__(self, module_str):
+        self.module_str = module_str
+
+    def __enter__(self):
+        self.start = perf_counter()
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self.time = perf_counter() - self.start
+        self.readout = f'Time for {self.module_str}: {self.time:.3f} seconds'
+        print(self.readout)
