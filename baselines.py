@@ -5,10 +5,12 @@ import torch
 from mcmc_yilun_torch import AnnealedMUHASampler
 import torch.distributions as dist
 import ot
+from typing import Tuple, List
 from r_and_r import intermediate_distribution, calculate_interval, calculate_energy, need_to_remove_with_thresholds, calculate_interval_multiple_timesteps, calculate_interval_to_avoid_multiple_timesteps
+from utils import plot_two_intervals
 
-def diffusion_baseline(model_to_test, 
-                       num_timesteps=50, 
+def diffusion_baseline(model_to_test,
+                       num_timesteps=50,
                        eval_batch_size=8000,
                        callback=None):
     dim = 2
@@ -31,13 +33,13 @@ def diffusion_baseline(model_to_test,
     return samples
 
 
-def ebm_baseline(model_to_test, 
-                 num_timesteps=50, 
-                 eval_batch_size=8000, 
-                 temperature=1, 
+def ebm_baseline(model_to_test,
+                 num_timesteps=50,
+                 eval_batch_size=8000,
+                 temperature=1,
                  samples_per_step=10,
                  callback=None):
-    
+
     noise_scheduler = ddpm.NoiseScheduler(num_timesteps=num_timesteps)
     device = ddpm.device
     model_to_test = model_to_test.to(device)
@@ -54,14 +56,14 @@ def ebm_baseline(model_to_test,
 
     initial_distribution = dist.MultivariateNormal(loc=torch.zeros(dim).to(device) + init_mu, covariance_matrix=torch.eye(dim).to(device) * init_std)
 
-    def energy_function(x, t): 
+    def energy_function(x, t):
         t = num_steps - 1 - t
         x = x.clone().to(device)
         t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
         return -(model_to_test.energy(x, t_tensor)) * temperature / noise_scheduler.sqrt_one_minus_alphas_cumprod[t]
 
     def gradient_function(x, t):
-        t = num_steps - 1 - t 
+        t = num_steps - 1 - t
         x = x.clone().to(device)
         t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
         return -(model_to_test(x, t_tensor)) * temperature / noise_scheduler.sqrt_one_minus_alphas_cumprod[t]
@@ -82,11 +84,11 @@ def ebm_baseline(model_to_test,
 
 
 def ebm_rejection_baseline(composed_model,
-                           models, 
+                           models,
                            intervals,
                            algebra,
                            **kwargs):
-    
+
     assert len(models) == 2
     assert algebra in ['product', 'summation', 'negation']
     device = ddpm.device
@@ -122,14 +124,14 @@ def ebm_rejection_baseline(composed_model,
 
 
 def diffusion_rejection_baseline(composed_model,
-                                 models, 
+                                 models,
                                  intervals,
                                  algebra,
                                  resample=True,
                                  **kwargs):
     assert len(models) == 2
     assert algebra in ['product', 'summation', 'negation']
-    device = ddpm.device    
+    device = ddpm.device
     num_timesteps = kwargs.get('num_timesteps', 50)
     filter_ratios = []
 
@@ -161,13 +163,14 @@ def diffusion_rejection_baseline(composed_model,
             x_numpy = np.empty((0, x_numpy.shape[1]))
 
         return torch.from_numpy(x_numpy).float().to(device)
-    
-    
+
+
     total_samples = diffusion_baseline(composed_model, **kwargs, callback=callback)
     return total_samples, filter_ratios
 
 
-def rejection_sampling_baseline_with_interval_calculation(model_to_test, model_1, model_2, algebra, eval_batch_size=8000):
+def rejection_sampling_baseline_with_interval_calculation(model_to_test, model_1, model_2, algebra, eval_batch_size=8000
+                                                          ) -> Tuple[np.ndarray, List[float], Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]]:
     dataset_1 = diffusion_baseline(model_1, eval_batch_size=eval_batch_size)[-1]
     dataset_2 = diffusion_baseline(model_2, eval_batch_size=eval_batch_size)[-1]
     dataset_3_origin = diffusion_baseline(model_to_test, eval_batch_size=eval_batch_size)[-1]
@@ -175,7 +178,7 @@ def rejection_sampling_baseline_with_interval_calculation(model_to_test, model_1
     interval_2 = calculate_interval(samples=dataset_2, model=model_2)
     energy_1 = calculate_energy(samples=dataset_3_origin, model=model_1)
     energy_2 = calculate_energy(samples=dataset_3_origin, model=model_2)
-    need_to_remove = need_to_remove_with_thresholds(algebra=algebra, 
+    need_to_remove = need_to_remove_with_thresholds(algebra=algebra,
                                                     energy_1=energy_1, energy_2=energy_2,
                                                     interval_1=interval_1, interval_2=interval_2)
     dataset_3 = dataset_3_origin[~need_to_remove]
@@ -186,11 +189,12 @@ def rejection_sampling_baseline_with_interval_calculation(model_to_test, model_1
     else:
         intervals_2 = calculate_interval_multiple_timesteps(samples=dataset_2, model=model_2)
 
-    return  diffusion_rejection_baseline(composed_model=model_to_test,
-                                         models=[model_1, model_2],
-                                         algebra=algebra,
-                                         intervals=[intervals_1, intervals_2],
-                                         eval_batch_size=eval_batch_size)
+    result = diffusion_rejection_baseline(composed_model=model_to_test,
+                                          models=[model_1, model_2],
+                                          algebra=algebra,
+                                          intervals=[intervals_1, intervals_2],
+                                          eval_batch_size=eval_batch_size)
+    return *result, (intervals_1, intervals_2)
 
 
 def evaluate_W1(generated_samples, target_samples):

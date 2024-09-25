@@ -2,13 +2,13 @@ import torch
 from typing import List, Union, Tuple
 import numpy as np
 from bootstrapping import (
-bootstrapping_and_get_max, 
+bootstrapping_and_get_max,
 bootstrapping_and_get_interval
 )
 from ddpm import device, NoiseScheduler
 from ddpm import EnergyMLP, CompositionEnergyMLP
 
-def intermediate_distribution(data_points: np.ndarray, 
+def intermediate_distribution(data_points: np.ndarray,
                               num_timesteps: int=50) -> List[np.ndarray]:
     """get the intermediate distribution of the data points
 
@@ -31,8 +31,8 @@ def intermediate_distribution(data_points: np.ndarray,
     return intermediate_data_list[::-1] + [origin_data.cpu().numpy()]
 
 
-def calculate_energy(samples: np.ndarray, 
-                     model: Union[EnergyMLP, CompositionEnergyMLP], 
+def calculate_energy(samples: np.ndarray,
+                     model: Union[EnergyMLP, CompositionEnergyMLP],
                      t: int=0) -> np.ndarray:
     """calculate the energy of the samples.
 
@@ -66,11 +66,11 @@ def calculate_threshold_multiple_timesteps(samples, model, confidence=0.999):
             energy_on_data = model.energy(torch.from_numpy(samples_t).to(device), t+torch.zeros(len(samples)).long().to(device))
         extreme_value = bootstrapping_and_get_max(energy_on_data.cpu().numpy(), confidence=confidence)
         extreme_values.append(extreme_value)
-    
+
     return extreme_values
 
 
-def calculate_interval(samples: np.ndarray, 
+def calculate_interval(samples: np.ndarray,
                        model: Union[EnergyMLP, CompositionEnergyMLP],
                        confidence: float=0.999) -> Tuple[float, float]:
     """calculate the interval of the samples.
@@ -90,7 +90,7 @@ def calculate_interval(samples: np.ndarray,
     return extreme_value_l, extreme_value_r
 
 
-def calculate_interval_multiple_timesteps(samples: np.ndarray, 
+def calculate_interval_multiple_timesteps(samples: np.ndarray,
                                           model: Union[EnergyMLP, CompositionEnergyMLP],
                                           confidence: float=0.999,
                                           num_timesteps: int=50) -> List[Tuple[float, float]]:
@@ -117,8 +117,8 @@ def calculate_interval_multiple_timesteps(samples: np.ndarray,
     return intervals
 
 
-def calculate_interval_to_avoid_multiple_timesteps(positive_samples: np.ndarray, 
-                                                   negative_samples: np.ndarray, 
+def calculate_interval_to_avoid_multiple_timesteps(positive_samples: np.ndarray,
+                                                   negative_samples: np.ndarray,
                                                    model: Union[EnergyMLP, CompositionEnergyMLP],
                                                    confidence: float=0.999,
                                                    num_timesteps: int=50) -> List[Tuple[float, float]]:
@@ -154,18 +154,20 @@ def calculate_interval_to_avoid_multiple_timesteps(positive_samples: np.ndarray,
 
     intervals_to_avoid = []
     for interval_positive, interval_negative in zip(intervals_positive, intervals_negative):
-        # essentially, we want to interval_negative - interval_positive
+        # essentially, we want to the interval_to_avoid = interval_negative - interval_positive
         if interval_negative[0] < interval_positive[0]:
             interval_to_avoid = (interval_negative[0], min(interval_positive[0], interval_negative[1]))
         else:
             interval_to_avoid = (max(interval_positive[1], interval_negative[0]), interval_negative[1])
+        # TODO (rainorangelemon): understand the following two cases
+        # Currently, it seems that the following two cases are not necessary
         # if interval_negative[1] <= interval_positive[0]:
         #     interval_to_avoid = (float('inf'), float('-inf'))
         # if interval_positive[0] >= interval_positive[1]:
         #     interval_to_avoid = (float('-inf'), float('inf'))
         intervals_to_avoid.append(interval_to_avoid)
 
-    return intervals_to_avoid    
+    return intervals_to_avoid
 
 
 def need_to_remove_with_thresholds(energy_1: np.ndarray,
@@ -199,5 +201,5 @@ def need_to_remove_with_thresholds(energy_1: np.ndarray,
     elif algebra == "summation":
         need_to_remove = out_of_interval[0] & out_of_interval[1]
     elif algebra == "negation":
-        need_to_remove = out_of_interval[0] | (~out_of_interval[1])    
+        need_to_remove = out_of_interval[0] | (~out_of_interval[1])
     return need_to_remove
