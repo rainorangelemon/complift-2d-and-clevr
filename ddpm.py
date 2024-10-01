@@ -50,7 +50,7 @@ class MLP(nn.Module):
         self.layers = torch.nn.ModuleList()
         for _ in range(hidden_layers):
             self.layers.append(Block(hidden_size))
-        
+
         self.output_mlp = nn.Linear(hidden_size, 2)
 
     def forward(self, x, t):
@@ -217,6 +217,51 @@ class NoiseScheduler():
 
         return s1 * x_start + s2 * x_noise
 
+    def add_noise_at_t(self,
+                       x_t: torch.Tensor,
+                       x_noise: torch.Tensor,
+                       timesteps_t: torch.Tensor,
+                       timesteps_k: torch.Tensor) -> torch.Tensor:
+        """add noise to the sample at time t
+
+        Args:
+            x_t (torch.Tensor): the sample at time t (batch_size, feature_size)
+            x_noise (torch.Tensor): add noise to the sample (batch_size, feature_size)
+            timesteps_t (torch.Tensor): the timesteps where x_t is at (batch_size,)
+            timesteps_k (torch.Tensor): the timesteps to add noise (batch_size,)
+
+        Returns:
+            torch.Tensor: the noisy sample (batch_size, feature_size)
+        """
+        assert (timesteps_t <= timesteps_k).all(), "timesteps_t should be less than or equal to timesteps_k"
+        B, T = x_t.size(0), self.num_timesteps
+
+        timesteps_t = timesteps_t.to(self.sqrt_alphas_cumprod.device)
+        timesteps_k = timesteps_k.to(self.sqrt_alphas_cumprod.device)
+        log_alphas = torch.log(self.alphas)
+        # -> (T,)
+        log_alphas_batched = log_alphas[None, :].expand(x_t.size(0), -1)
+        # -> (batch_size, T)
+        log_alphas_batched[torch.arange(T, device=x_t.device)[None, :] <= timesteps_t[:, None]] = 0
+        log_alphas_cumsum = torch.cumsum(log_alphas_batched, dim=-1)
+        # -> (batch_size, T)
+        alphas_cumprod = torch.exp(log_alphas_cumsum)
+        sqrt_alphas_cumprod = alphas_cumprod ** 0.5
+        # -> (batch_size, T)
+        sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
+        # -> (batch_size, T)
+
+        s1 = sqrt_alphas_cumprod[torch.arange(B, device=x_t.device), timesteps_k]
+        s2 = sqrt_one_minus_alphas_cumprod[torch.arange(B, device=x_t.device), timesteps_k]
+
+        s1 = s1.reshape(-1, 1)
+        s2 = s2.reshape(-1, 1)
+
+        s1 = s1.to(x_t.device)
+        s2 = s2.to(x_t.device)
+
+        return s1 * x_t + s2 * x_noise
+
     def __len__(self):
         return self.num_timesteps
 
@@ -254,7 +299,7 @@ if __name__ == "__main__":
         emb_size=config.embedding_size,
         time_emb=config.time_embedding,
         input_emb=config.input_embedding)
-    
+
     model.to(device)
     ema_model = deepcopy(model)
     ema_model.eval()
