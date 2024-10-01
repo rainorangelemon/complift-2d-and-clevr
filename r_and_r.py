@@ -8,6 +8,7 @@ bootstrapping_and_get_interval
 from ddpm import device, NoiseScheduler
 from ddpm import EnergyMLP, CompositionEnergyMLP
 
+
 def intermediate_distribution(data_points: np.ndarray,
                               num_timesteps: int=50) -> List[np.ndarray]:
     """get the intermediate distribution of the data points
@@ -203,3 +204,82 @@ def need_to_remove_with_thresholds(energy_1: np.ndarray,
     elif algebra == "negation":
         need_to_remove = out_of_interval[0] | (~out_of_interval[1])
     return need_to_remove
+
+
+
+def calculate_denoising_matching_term(x_k: torch.Tensor,
+                                      true_noise_at_t: torch.Tensor,
+                                      pred_noise_at_k: torch.Tensor,
+                                      cumprod_alpha_t: torch.Tensor,
+                                      cumprod_alpha_k: torch.Tensor) -> torch.Tensor:
+    """calculate the denoising matching term
+
+    Args:
+        x_k (torch.Tensor): samples at timestep k (batch, n_features)
+        true_noise_at_t (torch.Tensor): true noise at timestep t (batch, n_features)
+        pred_noise_at_k (torch.Tensor): predicted noise at timestep k (batch, n_features)
+        cumprod_alpha_t (torch.Tensor): cumulative product of alpha at timestep t (batch,)
+        cumprod_alpha_k (torch.Tensor): cumulative product of alpha at timestep k (batch,)
+
+    Returns:
+        torch.Tensor: denoising matching term (batch, n_features)
+    """
+    x_k_coeff = (cumprod_alpha_t - torch.sqrt(cumprod_alpha_t)) * torch.sqrt(1 - cumprod_alpha_k) / (cumprod_alpha_t - cumprod_alpha_k)
+    # -> (batch,)
+    noise_t_coeff = torch.sqrt(1 - cumprod_alpha_k) / torch.sqrt(cumprod_alpha_t - cumprod_alpha_k)
+    # -> (batch,)
+
+    return x_k_coeff[:, None] * x_k + noise_t_coeff[:, None] * true_noise_at_t - pred_noise_at_k
+
+
+def calculate_elbo(model: torch.nn.Module,
+                   x_t: torch.Tensor,
+                   t: int,
+                   T: int,
+                   n_sample: int,
+                   cumprod_alpha: torch.Tensor,
+                   seed: int) -> torch.Tensor:
+    """calculate the approximate ELBO
+
+    Args:
+        model (torch.nn.Module): a diffusion model
+        x_t (torch.Tensor): samples (batch, n_features)
+        t (int): timestep where x_t is at
+        T (int): total number of timesteps
+        n_sample (int): number of samples used for Monte Carlo estimation
+        cumprod_alpha (torch.Tensor): cumulative product of alpha (T,)
+        seed (int): random seed
+
+    Returns:
+        torch.Tensor: approximate ELBO (batch,)
+    """
+    assert cumprod_alpha.shape[0] == (T+1)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
+    B, D = x_t.shape
+
+    # sample noise (batch, n_sample, n_features)
+    noise = torch.randn(B, n_sample, D, device=x_t.device)
+
+    # sample timestep randomly from [t+1, T]: (batch, n_sample)
+    ts_k = torch.randint(t+1, T+1, (B, n_sample), device=x_t.device)
+
+    # sample x_k from p(x_k|x_t, t, k) (batch, n_sample, n_features)
+    x_k = model.p_sample(x_t, ts_k, noise)
+
+    # calculate the predicted noise from diffusion output (batch, n_sample, n_features)
+    noise_pred = model(x_k, ts_k)
+
+    # estimate the ELBO
+    denoising_matching_term = calculate_denoising_matching_term(x_k=x_k.flatten(0, 1),
+                                                                x_t=x_t.flatten(0, 1),
+                                                                noise_pred=noise_pred.flatten(0, 1),
+                                                                cumprod_alpha_t=cumprod_alpha[t.flatten(0, 1)],
+                                                                cumprod_alpha_k=cumprod_alpha[ts_k.flatten(0, 1)])
+    # -> (batch*n_sample, n_features)
+    denoising_matching_term = denoising_matching_term.view(B, n_sample, D)
+    # -> (batch, n_sample, n_features)
+    denoising_matching_term = denoising_matching_term.pow(2).sum(dim=-1).mean(dim=-1)
+    # -> (batch,)
+    return -denoising_matching_term
