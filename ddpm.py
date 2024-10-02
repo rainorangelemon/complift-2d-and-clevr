@@ -68,7 +68,7 @@ class EnergyMLP(nn.Module):
         self.mlp = MLP(*args, **kwargs)
         self.energy_form = energy_form
 
-    def energy(self, x, t):
+    def _energy(self, x, t):
         if self.energy_form == 'salimans':
             return ((x - self.mlp(x, t)) ** 2).sum(dim=-1)
         elif self.energy_form == 'L2':
@@ -83,12 +83,15 @@ class EnergyMLP(nn.Module):
         with torch.autograd.enable_grad():
             # take the derivative of the energy
             x = x.clone().detach().requires_grad_(True)
-            energy = self.energy(x, t)
+            energy = self._energy(x, t)
             grad = torch.autograd.grad(energy.sum(), x, create_graph=True)[0]
         # print(x.max(), energy.shape, energy.max(), grad.shape, grad.max(), x[(grad.abs().sum(-1).argmax())])
         if not torch.is_grad_enabled():
             grad = grad.detach()
         return grad
+
+    def energy(self, x, t):
+        return self._energy(x, t)
 
 
 class CompositionEnergyMLP(nn.Module):
@@ -97,7 +100,7 @@ class CompositionEnergyMLP(nn.Module):
         self.models = nn.ModuleList(models)
         self.algebra = algebra
 
-    def energy(self, x, t):
+    def _energy(self, x, t):
         energies = [model.energy(x, t) for model in self.models]
         if self.algebra == 'product':
             result = torch.sum(torch.stack(energies), dim=0)
@@ -121,13 +124,16 @@ class CompositionEnergyMLP(nn.Module):
             with torch.autograd.enable_grad():
                 # take the derivative of the energy
                 x = x.clone().detach().requires_grad_(True)
-                energy = self.energy(x, t)
+                energy = self._energy(x, t)
                 grad = torch.autograd.grad(energy.sum(), x, create_graph=True)[0]
             # print(x.max(), energy.shape, energy.max(), grad.shape, grad.max(), x[(grad.abs().sum(-1).argmax())])
             if not torch.is_grad_enabled():
                 grad = grad.detach()
             # print('composition', grad.shape)
             return grad
+
+    def energy(self, x, t):
+        return self._energy(x, t)
 
 
 class NoiseScheduler():
@@ -234,15 +240,17 @@ class NoiseScheduler():
             torch.Tensor: the noisy sample (batch_size, feature_size)
         """
         assert (timesteps_t <= timesteps_k).all(), "timesteps_t should be less than or equal to timesteps_k"
+        device = x_t.device
         B, T = x_t.size(0), self.num_timesteps
 
-        timesteps_t = timesteps_t.to(self.sqrt_alphas_cumprod.device)
-        timesteps_k = timesteps_k.to(self.sqrt_alphas_cumprod.device)
+        timesteps_t = timesteps_t.to(device)
+        timesteps_k = timesteps_k.to(device)
         log_alphas = torch.log(self.alphas)
         # -> (T,)
         log_alphas_batched = log_alphas[None, :].expand(x_t.size(0), -1)
+        log_alphas_batched = log_alphas_batched.to(device)
         # -> (batch_size, T)
-        log_alphas_batched[torch.arange(T, device=x_t.device)[None, :] <= timesteps_t[:, None]] = 0
+        log_alphas_batched[torch.arange(T, device=device)[None, :] < timesteps_t[:, None]] = 0
         log_alphas_cumsum = torch.cumsum(log_alphas_batched, dim=-1)
         # -> (batch_size, T)
         alphas_cumprod = torch.exp(log_alphas_cumsum)
@@ -251,14 +259,14 @@ class NoiseScheduler():
         sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
         # -> (batch_size, T)
 
-        s1 = sqrt_alphas_cumprod[torch.arange(B, device=x_t.device), timesteps_k]
-        s2 = sqrt_one_minus_alphas_cumprod[torch.arange(B, device=x_t.device), timesteps_k]
+        s1 = sqrt_alphas_cumprod[torch.arange(B, device=device), timesteps_k]
+        s2 = sqrt_one_minus_alphas_cumprod[torch.arange(B, device=device), timesteps_k]
 
         s1 = s1.reshape(-1, 1)
         s2 = s2.reshape(-1, 1)
 
-        s1 = s1.to(x_t.device)
-        s2 = s2.to(x_t.device)
+        s1 = s1.to(device)
+        s2 = s2.to(device)
 
         return s1 * x_t + s2 * x_noise
 

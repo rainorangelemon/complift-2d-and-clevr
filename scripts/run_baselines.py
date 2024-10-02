@@ -10,6 +10,7 @@ from baselines import (
     intermediate_distribution,
     diffusion_baseline,
     rejection_sampling_baseline_with_interval_calculation,
+    rejection_sampling_baseline_with_interval_calculation_elbo,
 )
 from datasets import generate_data_points
 from utils import catchtime, plot_points, plot_two_intervals, plot_acceptance_ratios
@@ -32,7 +33,7 @@ for algebra in ['product', 'summation', 'negation']:
         with catchtime('diffusion'):
             generated_samples_diffusion = diffusion_baseline(model_to_test)[-1]
         with catchtime('rejection'):
-            generated_samples_rejection_all_t, rejection_ratios, intervals = rejection_sampling_baseline_with_interval_calculation(model_to_test, model_1, model_2, algebra=algebra)
+            generated_samples_rejection_all_t, rejection_ratios, intervals = rejection_sampling_baseline_with_interval_calculation_elbo(model_to_test, model_1, model_2, algebra=algebra)
             generated_samples_rejection = generated_samples_rejection_all_t[-1]
         dataset_1 = generate_data_points(n=8000, dataset=f"{algebra}_{suffix}1")
         dataset_2 = generate_data_points(n=8000, dataset=f"{algebra}_{suffix}2")

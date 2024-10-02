@@ -1,12 +1,24 @@
 from tqdm.auto import tqdm
 import numpy as np
+import types
+from copy import deepcopy
+from typing import Union
+
 import ddpm
 import torch
 from mcmc_yilun_torch import AnnealedMUHASampler
 import torch.distributions as dist
 import ot
 from typing import Tuple, List
-from r_and_r import intermediate_distribution, calculate_interval, calculate_energy, need_to_remove_with_thresholds, calculate_interval_multiple_timesteps, calculate_interval_to_avoid_multiple_timesteps
+from r_and_r import (
+intermediate_distribution,
+calculate_interval,
+calculate_energy,
+need_to_remove_with_thresholds,
+calculate_interval_multiple_timesteps,
+calculate_interval_to_avoid_multiple_timesteps,
+calculate_elbo
+)
 from utils import plot_two_intervals
 
 def diffusion_baseline(model_to_test,
@@ -140,7 +152,7 @@ def diffusion_rejection_baseline(composed_model,
         if isinstance(x, torch.Tensor):
             x_numpy = x.cpu().numpy()
         x = torch.from_numpy(x_numpy).float().to(device)
-        t_tensor = torch.from_numpy(np.repeat(t, len(x))).long().to(device)
+        t_tensor = torch.full((len(x),), t, dtype=torch.long, device=device)
         energies = [model.energy(x, t_tensor) for model in models]
         interval_mins = [interval[reverse_t][0] for interval in intervals]
         interval_maxs = [interval[reverse_t][1] for interval in intervals]
@@ -195,6 +207,53 @@ def rejection_sampling_baseline_with_interval_calculation(model_to_test, model_1
                                           intervals=[intervals_1, intervals_2],
                                           eval_batch_size=eval_batch_size)
     return *result, (intervals_1, intervals_2)
+
+
+def rejection_sampling_baseline_with_interval_calculation_elbo(model_to_test: ddpm.CompositionEnergyMLP,
+                                                               model_1: ddpm.EnergyMLP,
+                                                               model_2: ddpm.EnergyMLP,
+                                                               algebra: str,
+                                                               eval_batch_size=8000,
+                                                               n_sample_for_elbo=1000,
+                                                               mini_batch=20,
+                                                               num_timesteps=50,
+        ) -> Tuple[np.ndarray, List[float], Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]]:
+    """similar to rejection_sampling_baseline_with_interval_calculation, but using elbo to estimate the -log p instead of energy
+
+    Args:
+        model_to_test (ddpm.CompositionEnergyMLP): the composed model
+        model_1 (ddpm.EnergyMLP): model for algebra 1
+        model_2 (ddpm.EnergyMLP): model for algebra 2
+        algebra (str): type of the algebra, one of ["product", "summation", "negation"]
+        eval_batch_size (int, optional): Number of samples to
+                                         (1) calculate the support interval,
+                                         (2) generate the samples.
+        n_sample_for_elbo (int, optional): Number of (t, epsilon) pairs to estimate ELBO.
+        mini_batch (int, optional): mini batch size for elbo estimation.
+        num_timesteps (int, optional): number of timesteps for the diffusion model.
+
+    Returns:
+        Tuple[np.ndarray, List[float], Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]]: samples, filter_ratios, intervals
+    """
+    # overwrite model_to_test.energy to use elbo
+    def estimate_neg_logp(model: Union[ddpm.EnergyMLP, ddpm.CompositionEnergyMLP],
+                          x: torch.Tensor,
+                          t: torch.Tensor):
+        if x.shape[0] == 0:
+            return torch.zeros((0,), dtype=x.dtype, device=x.device)
+        assert len(t.unique())==1, "t should be the same for all samples, but got {}".format(t.unique())
+        noise_scheduler = ddpm.NoiseScheduler(num_timesteps=num_timesteps)
+        return -calculate_elbo(model, noise_scheduler, x_t=x, t=t[0], n_samples=n_sample_for_elbo, seed=t[0], mini_batch=mini_batch)
+
+    # deepcopy to avoid modifying the original model
+    model_to_test = deepcopy(model_to_test)
+    model_1 = deepcopy(model_1)
+    model_2 = deepcopy(model_2)
+
+    model_to_test.energy = types.MethodType(estimate_neg_logp, model_to_test)
+    model_1.energy = types.MethodType(estimate_neg_logp, model_1)
+    model_2.energy = types.MethodType(estimate_neg_logp, model_2)
+    return rejection_sampling_baseline_with_interval_calculation(model_to_test, model_1, model_2, algebra, eval_batch_size)
 
 
 def evaluate_W1(generated_samples, target_samples):

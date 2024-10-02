@@ -206,7 +206,6 @@ def need_to_remove_with_thresholds(energy_1: np.ndarray,
     return need_to_remove
 
 
-
 def calculate_denoising_matching_term(x_k: torch.Tensor,
                                       true_noise_at_t: torch.Tensor,
                                       pred_noise_at_k: torch.Tensor,
@@ -232,13 +231,14 @@ def calculate_denoising_matching_term(x_k: torch.Tensor,
     return x_k_coeff[:, None] * x_k + noise_t_coeff[:, None] * true_noise_at_t - pred_noise_at_k
 
 
+@torch.no_grad()
 def calculate_elbo(model: torch.nn.Module,
                    noise_scheduler: NoiseScheduler,
                    x_t: torch.Tensor,
                    t: int,
-                   T: int,
-                   n_sample: int,
-                   seed: int) -> torch.Tensor:
+                   n_samples: int,
+                   seed: int,
+                   mini_batch: int) -> torch.Tensor:
     """calculate the approximate ELBO
 
     Args:
@@ -246,9 +246,10 @@ def calculate_elbo(model: torch.nn.Module,
         x_t (torch.Tensor): samples (batch, n_features)
         t (int): timestep where x_t is at
         T (int): total number of timesteps
-        n_sample (int): number of samples used for Monte Carlo estimation
+        n_samples (int): number of samples used for Monte Carlo estimation
         cumprod_alpha (torch.Tensor): cumulative product of alpha (T,)
         seed (int): random seed
+        mini_batch (int): mini batch size
 
     Returns:
         torch.Tensor: approximate ELBO (batch,)
@@ -259,33 +260,52 @@ def calculate_elbo(model: torch.nn.Module,
     B, D = x_t.shape
 
     # sample noise (batch, n_sample, n_features)
-    noise = torch.randn(B, n_sample, D, device=x_t.device)
+    noise = torch.randn(B, n_samples, D, device=x_t.device)
 
     # sample timestep randomly from [t, T): (batch, n_sample)
-    ts_k = torch.randint(t, T, (B, n_sample), device=x_t.device)
-    reshaped_ts_k = ts_k.reshape(B*n_sample)
-    reshaped_ts_t = torch.full((B*n_sample,), t, device=x_t.device)
+    T = len(noise_scheduler)
+    ts_k = torch.randint(t, T, (B, n_samples), device=x_t.device)
+    reshaped_ts_k = ts_k.reshape(B*n_samples)
+    reshaped_ts_t = torch.full((B*n_samples,), t, device=x_t.device)
 
     # sample x_k from p(x_k | x_t, t, k) (batch, n_sample, n_features)
-    reshaped_x_t = x_t[:, None, :].expand(B, n_sample, D).reshape(B*n_sample, D)
-    reshaped_noise = noise.reshape(B*n_sample, D)
+    reshaped_x_t = x_t[:, None, :].expand(B, n_samples, D).reshape(B*n_samples, D)
+    reshaped_noise = noise.reshape(B*n_samples, D)
     x_k = noise_scheduler.add_noise_at_t(reshaped_x_t, reshaped_noise, reshaped_ts_t, reshaped_ts_k)
-    # -> (batch*n_sample, n_features)
-
-    # calculate the predicted noise from diffusion output (batch, n_sample, n_features)
-    noise_pred = model(x_k, reshaped_ts_k)
-    # -> (batch*n_sample, n_features)
+    x_k = x_k.reshape(B, n_samples, D)
+    # -> (batch, n_sample, n_features)
 
     # estimate the ELBO
-    cumprod_alpha = noise_scheduler.alphas_cumprod
-    denoising_matching_term = calculate_denoising_matching_term(x_k=x_k,
-                                                                x_t=reshaped_x_t,
-                                                                noise_pred=noise_pred,
-                                                                cumprod_alpha_t=cumprod_alpha[reshaped_ts_t],
-                                                                cumprod_alpha_k=cumprod_alpha[reshaped_ts_k])
-    # -> (batch*n_sample, n_features)
-    denoising_matching_term = denoising_matching_term.view(B, n_sample, D)
-    # -> (batch, n_sample, n_features)
-    denoising_matching_term = denoising_matching_term.pow(2).mean(dim=(1, 2))
+    cumprod_alpha_prev = noise_scheduler.alphas_cumprod_prev.to(x_t.device)
+    cumprod_alpha = noise_scheduler.alphas_cumprod.to(x_t.device)
+
+    denoising_matching_term_list = []
+    for i in range(0, n_samples, mini_batch):
+        # Prepare mini-batch
+        batch_x_k = x_k[:, i:i+mini_batch, :].reshape(-1, D)
+        batch_ts_k = ts_k[:, i:i+mini_batch].reshape(-1)
+        batch_noise = noise[:, i:i+mini_batch, :].reshape(-1, D)
+        batch_ts_t = torch.full((B * min(mini_batch, n_samples - i),), t, device=x_t.device)
+
+        # Model prediction
+        batch_noise_pred = model(batch_x_k, batch_ts_k)
+
+        batch_term = calculate_denoising_matching_term(
+            x_k=batch_x_k,
+            true_noise_at_t=batch_noise,
+            pred_noise_at_k=batch_noise_pred,
+            cumprod_alpha_t=cumprod_alpha_prev[batch_ts_t],
+            cumprod_alpha_k=cumprod_alpha[batch_ts_k]
+        )
+        # -> (batch * min(mini_batch, n_samples - i), n_features)
+        batch_term = batch_term.pow(2).mean(dim=-1)
+        # -> (batch * min(mini_batch, n_samples - i),)
+        denoising_matching_term_list.append(batch_term.view(B, -1))
+        # -> (batch, min(mini_batch, n_samples - i))
+
+    denoising_matching_term = torch.cat(denoising_matching_term_list, dim=1)
+    assert denoising_matching_term.shape == (B, n_samples)
+    # -> (batch, n_sample)
+    denoising_matching_term = denoising_matching_term.mean(dim=1)
     # -> (batch,)
     return -denoising_matching_term
