@@ -44,7 +44,8 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
         callback (Union[None, Callable[[torch.Tensor, int], torch.Tensor]], optional): callback function to modify the samples. Defaults to None.
 
     Returns:
-        List[torch.Tensor]: generated samples at each timestep, from the start timestep to the end timestep through reverse diffusion process
+        List[torch.Tensor]: generated samples at each timestep, from the start timestep to the end timestep through reverse diffusion process,
+                            all the samples are stored in CPU to save GPU memory.
     """
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -73,7 +74,7 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
             sample = out["sample"]
             if callback is not None:
                 sample = callback(sample, t)
-        samples.append(sample)
+        samples.append(sample.cpu())
     return samples
 
 

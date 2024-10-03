@@ -361,7 +361,7 @@ def compose_imagenet_diffusion_models(dit_model: DiT.models.DiT,
             condition_eps = class_1_eps + class_2_eps
         elif algebra == "negation":
             # TODO (rainorangelemon): probably finetune the hyperparameters of this setting
-            condition_eps = class_1_eps - 0.5 * class_2_eps
+            condition_eps = class_1_eps - class_2_eps
         else:
             raise ValueError("algebra should be 'product' or 'negation'")
         eps = uncond_eps + cfg_scale * condition_eps

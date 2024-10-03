@@ -77,9 +77,27 @@ def main(args: argparse.Namespace):
     with catchtime('diffusion'):
         latent_size = args.image_size // 8
         generated_samples_diffusion = diffusion_baseline(model_to_test, diffusion, latent_shape=(4, latent_size, latent_size))[-1]
-        generated_samples_diffusion = vae.decode(generated_samples_diffusion / 0.18215).sample
+
+        batch_size = 32
+        num_batches = generated_samples_diffusion.shape[0] // batch_size
+        decoded_samples = []
+
+        for i in range(num_batches):
+            batch = generated_samples_diffusion[i * batch_size:(i + 1) * batch_size].to(device)
+            decoded_batch = vae.decode(batch / 0.18215).sample.cpu()
+            decoded_samples.append(decoded_batch)
+
+        # If there are remaining samples that don't fit into a full batch
+        if generated_samples_diffusion.shape[0] % batch_size != 0:
+            batch = generated_samples_diffusion[num_batches * batch_size:].to(device)
+            decoded_batch = vae.decode(batch / 0.18215).sample.cpu()
+            decoded_samples.append(decoded_batch)
+
+        generated_samples_diffusion = torch.cat(decoded_samples, dim=0)
+
     # Save and display images:
-    save_image(generated_samples_diffusion, "sample_diffusion.png", nrow=4, normalize=True, value_range=(-1, 1))
+    nrow = np.ceil(np.sqrt(generated_samples_diffusion.shape[0])).astype(int)
+    save_image(generated_samples_diffusion, "sample_diffusion.png", nrow=nrow, normalize=True, value_range=(-1, 1))
 
     # with catchtime('rejection'):
     #     generated_samples_rejection_all_t, rejection_ratios, intervals = rejection_sampling_baseline_with_interval_calculation_elbo(model_to_test, model_1, model_2, algebra=algebra)
@@ -112,7 +130,7 @@ if __name__ == "__main__":
     parser.add_argument("--class-1", type=int, default=765)  # 765 is "rocking chair"
     parser.add_argument("--class-2", type=int, default=954)  # 954 is "zebra"
     parser.add_argument("--algebra", type=str, choices=["product", "negation"], default="product")
-    parser.add_argument("--cfg-scale", type=float, default=4.0)
+    parser.add_argument("--cfg-scale", type=float, default=1.0)
     parser.add_argument("--num-sampling-steps", type=int, default=250)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--ckpt", type=str, default=None,
