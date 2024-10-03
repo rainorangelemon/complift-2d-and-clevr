@@ -1,5 +1,8 @@
 # compare EBM across different timesteps
 
+import DiT.diffusion
+import DiT.download
+import DiT.models
 import ddpm
 import torch
 from baselines import (
@@ -16,6 +19,41 @@ from datasets import generate_data_points
 from utils import catchtime, plot_points, plot_two_intervals, plot_acceptance_ratios
 import wandb
 import numpy as np
+import DiT
+import argparse
+from typing import Tuple
+from diffusers.models import AutoencoderKL
+
+
+torch.set_grad_enabled(False)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def load_model(args: argparse.Namespace) -> Tuple[DiT.models.DiT, AutoencoderKL, DiT.diffusion.SpacedDiffusion]:
+    """load the Diffusion Transformer model and the VAE model
+
+    Args:
+        args (argparse.Namespace): arguments, including the model, image size, number of classes, and the checkpoint
+
+    Returns:
+        Tuple[DiT.models.DiT, AutoencoderKL, DiT.diffusion.SpacedDiffusion]: the DiT model, the VAE model, and the diffusion model
+    """
+    # Load model:
+    latent_size = args.image_size // 8
+    model = DiT.models.DiT_models[args.model](
+        input_size=latent_size,
+        num_classes=args.num_classes
+    ).to(device)
+    # Auto-download a pre-trained model or load a custom DiT checkpoint from train.py:
+    ckpt_path = args.ckpt or f"DiT-XL-2-{args.image_size}x{args.image_size}.pt"
+    state_dict = DiT.download.find_model(ckpt_path)
+    model.load_state_dict(state_dict)
+    model.eval()  # important!
+    diffusion = DiT.diffusion.create_diffusion(str(args.num_sampling_steps))
+    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+    vae.eval()
+    return model, vae, diffusion
+
 
 # Initialize wandb
 wandb.init(project="r_and_r", name="baselines_ImageNet")

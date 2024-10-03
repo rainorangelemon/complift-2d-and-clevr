@@ -2,4 +2,6 @@ pretrained_models
 wandb
 *.png
 __pycache__
+DiT
+__pycache__/
 .ipynb_checkpoints/
