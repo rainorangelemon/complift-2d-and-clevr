@@ -2,7 +2,7 @@
 
 import ddpm
 import torch
-from baselines import (
+from baselines_2d import (
     ebm_baseline,
     diffusion_baseline,
     evaluate_W2,
