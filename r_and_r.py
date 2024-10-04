@@ -1,14 +1,12 @@
 import torch
 from typing import List, Union, Tuple, Callable
 import numpy as np
-import DiT.models
 from bootstrapping import (
 bootstrapping_and_get_max,
 bootstrapping_and_get_interval
 )
 from ddpm import device, NoiseScheduler
 from ddpm import EnergyMLP, CompositionEnergyMLP
-import DiT
 
 
 def intermediate_distribution(data_points: np.ndarray,
@@ -313,58 +311,58 @@ def calculate_elbo(model: torch.nn.Module,
     return -denoising_matching_term
 
 
-def compose_imagenet_diffusion_models(dit_model: DiT.models.DiT,
-                                      cfg_scale: float,
-                                      algebra: str,
-                                      class_1: int,
-                                      class_2: int,
-                                      null_class: int) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
-    """compose imagenet diffusion transformer models
+# def compose_imagenet_diffusion_models(dit_model: DiT.models.DiT,
+#                                       cfg_scale: float,
+#                                       algebra: str,
+#                                       class_1: int,
+#                                       class_2: int,
+#                                       null_class: int) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+#     """compose imagenet diffusion transformer models
 
-    Args:
-        dit_model (DiT.models.DiT): DiT model
-        cfg_scale (float): scale of the configuration
-        algebra (str): algebra operation, 'product', 'negation'
-        class_1 (int): class 1
-        class_2 (int): class 2
-        null_class (int): null class for unconditional generation
+#     Args:
+#         dit_model (DiT.models.DiT): DiT model
+#         cfg_scale (float): scale of the configuration
+#         algebra (str): algebra operation, 'product', 'negation'
+#         class_1 (int): class 1
+#         class_2 (int): class 2
+#         null_class (int): null class for unconditional generation
 
-    Returns:
-        Callable[[torch.Tensor, torch.Tensor], torch.Tensor]: forward function with configuration
-    """
+#     Returns:
+#         Callable[[torch.Tensor, torch.Tensor], torch.Tensor]: forward function with configuration
+#     """
 
-    assert algebra in ["product", "negation"], "algebra should be 'product' or 'negation'; and 'summation' is not supported yet"
+#     assert algebra in ["product", "negation"], "algebra should be 'product' or 'negation'; and 'summation' is not supported yet"
 
-    def forward_with_cfg(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
-        """
-        half = x
-        combined = torch.cat([half, half, half], dim=0)
-        y = torch.cat([torch.full((len(half),), class_1, dtype=torch.long, device=x.device),
-                       torch.full((len(half),), class_2, dtype=torch.long, device=x.device),
-                       torch.full((len(half),), null_class, dtype=torch.long, device=x.device)], dim=0)
-        t = torch.cat([t, t, t], dim=0)
-        # no need to track gradients for the classifier
-        model_out = dit_model.forward(combined, t, y)
-        # For exact reproducibility reasons, we apply classifier-free guidance on only
-        # three channels by default. The standard approach to cfg applies it to all channels.
-        # This can be done by uncommenting the following line and commenting-out the line following that.
-        # eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
-        eps, rest = model_out[:, :3], model_out[:, 3:]
-        cond_1_eps, cond_2_eps, uncond_eps = torch.split(eps, len(eps) // 3, dim=0)
-        _, _, rest = torch.split(rest, len(rest) // 3, dim=0)
-        class_1_eps = cond_1_eps - uncond_eps
-        class_2_eps = cond_2_eps - uncond_eps
+#     def forward_with_cfg(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+#         """
+#         Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
+#         """
+#         half = x
+#         combined = torch.cat([half, half, half], dim=0)
+#         y = torch.cat([torch.full((len(half),), class_1, dtype=torch.long, device=x.device),
+#                        torch.full((len(half),), class_2, dtype=torch.long, device=x.device),
+#                        torch.full((len(half),), null_class, dtype=torch.long, device=x.device)], dim=0)
+#         t = torch.cat([t, t, t], dim=0)
+#         # no need to track gradients for the classifier
+#         model_out = dit_model.forward(combined, t, y)
+#         # For exact reproducibility reasons, we apply classifier-free guidance on only
+#         # three channels by default. The standard approach to cfg applies it to all channels.
+#         # This can be done by uncommenting the following line and commenting-out the line following that.
+#         # eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
+#         eps, rest = model_out[:, :3], model_out[:, 3:]
+#         cond_1_eps, cond_2_eps, uncond_eps = torch.split(eps, len(eps) // 3, dim=0)
+#         _, _, rest = torch.split(rest, len(rest) // 3, dim=0)
+#         class_1_eps = cond_1_eps - uncond_eps
+#         class_2_eps = cond_2_eps - uncond_eps
 
-        if algebra == "product":
-            condition_eps = class_1_eps + class_2_eps
-        elif algebra == "negation":
-            # TODO (rainorangelemon): probably finetune the hyperparameters of this setting
-            condition_eps = class_1_eps - class_2_eps
-        else:
-            raise ValueError("algebra should be 'product' or 'negation'")
-        eps = uncond_eps + cfg_scale * condition_eps
-        return torch.cat([eps, rest], dim=1)
+#         if algebra == "product":
+#             condition_eps = class_1_eps + class_2_eps
+#         elif algebra == "negation":
+#             # TODO (rainorangelemon): probably finetune the hyperparameters of this setting
+#             condition_eps = class_1_eps - class_2_eps
+#         else:
+#             raise ValueError("algebra should be 'product' or 'negation'")
+#         eps = uncond_eps + cfg_scale * condition_eps
+#         return torch.cat([eps, rest], dim=1)
 
-    return forward_with_cfg
+#     return forward_with_cfg
