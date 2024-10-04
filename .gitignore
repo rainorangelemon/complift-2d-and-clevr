@@ -1,6 +1,9 @@
 pretrained_models
 wandb
 *.png
+*.npz
+*.pt
+*.gif
 __pycache__
 DiT
 __pycache__/
