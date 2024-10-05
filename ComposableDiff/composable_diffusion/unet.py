@@ -269,19 +269,21 @@ class QKVAttention(nn.Module):
         bs, width, length = qkv.shape
         assert width % (3 * self.n_heads) == 0
         ch = width // (3 * self.n_heads)
-        q, k, v = qkv.reshape(bs * self.n_heads, ch * 3, length).split(ch, dim=1)
+
+        # Reshape and split Q, K, V
+        q, k, v = qkv.reshape(bs, self.n_heads, ch * 3, length).split(ch, dim=2)
+
         if encoder_kv is not None:
             assert encoder_kv.shape[1] == self.n_heads * ch * 2
-            ek, ev = encoder_kv.reshape(bs * self.n_heads, ch * 2, -1).split(ch, dim=1)
+            ek, ev = encoder_kv.reshape(bs, self.n_heads, ch * 2, -1).split(ch, dim=2)
             k = th.cat([ek, k], dim=-1)
             v = th.cat([ev, v], dim=-1)
-        scale = 1 / math.sqrt(math.sqrt(ch))
-        weight = th.einsum(
-            "bct,bcs->bts", q * scale, k * scale
-        )  # More stable with f16 than dividing afterwards
-        weight = th.softmax(weight.float(), dim=-1).type(weight.dtype)
-        a = th.einsum("bts,bcs->bct", weight, v)
-        return a.reshape(bs, -1, length)
+
+        # Apply scaled dot product attention
+        attn_output = F.scaled_dot_product_attention(q, k, v)
+
+        # Reshape the output
+        return attn_output.reshape(bs, -1, length)
 
 
 class UNetModel(nn.Module):
@@ -538,6 +540,7 @@ class UNetModel(nn.Module):
         self.middle_block.apply(convert_module_to_f32)
         self.output_blocks.apply(convert_module_to_f32)
 
+    @th.compile(mode="max-autotune")
     def forward(self, x, timesteps, y=None, masks=None, layer_idx=None):
         """
         Apply the model to an input batch.
@@ -566,13 +569,22 @@ class UNetModel(nn.Module):
                 emb = emb + label_emb
             elif self.dataset == 'clevr_rel':
                 assert masks is not None, "masks are not provided for training relational clevr data."
-                label_emb = th.empty((y.shape[0], emb.shape[1]), device=y.device)
-                label_emb[~masks] = self.null_emb.weight[0][None].repeat(label_emb[~masks].shape[0], 1)
-                # embed objects and relations
-                obj_emb_1 = self.fc(th.cat([self.obj_emb[i](y[masks][:, i]) for i in range(5)], dim=1))
-                obj_emb_2 = self.fc(th.cat([self.obj_emb[i - 5](y[masks][:, i]) for i in range(5, 10)], dim=1))
-                rel_emb = self.rel_emb(y[masks][:, -1])
-                label_emb[masks] = th.cat((obj_emb_1, obj_emb_2, rel_emb), dim=1)
+                # Create null embeddings
+                null_emb_repeated = self.null_emb.weight[0][None].repeat(y.shape[0], 1)
+                # Create object embeddings for the first set of objects
+                obj_emb_1 = self.fc(th.cat([self.obj_emb[i](y[:, i]) for i in range(5)], dim=1))
+                # Create object embeddings for the second set of objects
+                obj_emb_2 = self.fc(th.cat([self.obj_emb[i - 5](y[:, i]) for i in range(5, 10)], dim=1))
+                # Create relation embeddings
+                rel_emb = self.rel_emb(y[:, -1])
+                # Combine object and relation embeddings
+                combined_emb = th.cat((obj_emb_1, obj_emb_2, rel_emb), dim=1)
+                # Create label embeddings using masks
+                label_emb = th.where(
+                    masks.unsqueeze(1),
+                    combined_emb,
+                    null_emb_repeated
+                )
                 emb = emb + label_emb
             else:
                 raise NotImplementedError

@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# Create a directory to store the downloaded files
+mkdir -p clevr_datasets
+
+# Function to download a file
+download_file() {
+	local url=$1
+	local filename=$2
+	echo "Downloading $filename..."
+	curl -L "$url" -o "$filename"
+	echo "Downloaded $filename"
+}
+
+# CLEVR Relation Test Datasets
+download_file "https://www.dropbox.com/s/bfj4wjb4ksic6z2/clevr_generation_1_relations.npz?dl=1" "test_clevr_rel_5000_1.npz"
+download_file "https://www.dropbox.com/s/g59mscx6880j72h/clevr_generation_2_relations.npz?dl=1" "test_clevr_rel_5000_2.npz"
+download_file "https://www.dropbox.com/s/nvc2mdsixi7vu3i/clevr_generation_3_relations.npz?dl=1" "test_clevr_rel_5000_3.npz"
+
+# CLEVR 2D Position Test Datasets
+download_file "https://www.dropbox.com/s/je1nbw463ic1urm/clevr_pos_5000_1.npz?dl=1" "test_clevr_pos_5000_1.npz"
+download_file "https://www.dropbox.com/s/8svd75vw1j7wmzj/clevr_pos_5000_2.npz?dl=1" "test_clevr_pos_5000_2.npz"
+download_file "https://www.dropbox.com/s/j3d32udsg1cewvc/clevr_pos_5000_3.npz?dl=1" "test_clevr_pos_5000_3.npz"

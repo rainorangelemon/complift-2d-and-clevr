@@ -4,6 +4,7 @@ wandb
 *.npz
 *.pt
 *.gif
+*.txt
 __pycache__
 DiT
 __pycache__/

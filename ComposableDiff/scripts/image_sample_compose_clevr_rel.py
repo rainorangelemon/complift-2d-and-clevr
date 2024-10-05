@@ -16,46 +16,7 @@ from pathlib import Path
 
 from torch.utils.data import DataLoader, Dataset
 from torchvision.utils import make_grid, save_image
-
-has_cuda = th.cuda.is_available()
-device = th.device('cpu' if not has_cuda else 'cuda')
-
-options = model_and_diffusion_defaults()
-options['dataset'] = 'clevr_rel'
-options['use_fp16'] = has_cuda
-options['timestep_respacing'] = '100' # use 100 diffusion steps for fast sampling
-options['num_classes'] = '4,3,9,3,3,7'
-
-parser = argparse.ArgumentParser()
-add_dict_to_argparser(parser, options)
-
-parser.add_argument('--ckpt_path', required=True)
-parser.add_argument('--weights', type=float, nargs="+", default=7.5)
-
-args = parser.parse_args()
-ckpt_path = args.ckpt_path
-del args.ckpt_path
-
-options = args_to_dict(args, model_and_diffusion_defaults().keys())
-model, diffusion = create_model_and_diffusion(**options)
-
-model.eval()
-if options['use_fp16']:
-    model.convert_to_fp16()
-model.to(device)
-
-print(f'loading from {ckpt_path}')
-
-checkpoint = th.load(ckpt_path, map_location='cpu')
-model.load_state_dict(checkpoint)
-
-print('total base parameters', sum(x.numel() for x in model.parameters()))
-
-def show_images(batch: th.Tensor, file_name: str = 'result.png'):
-    """ Display a batch of images inline. """
-    scaled = ((batch + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu()
-    reshaped = scaled.permute(2, 0, 3, 1).reshape([batch.shape[2], -1, 3])
-    Image.fromarray(reshaped.numpy()).save(file_name)
+from tqdm.auto import tqdm
 
 
 class CLEVRRelDataset(Dataset):
@@ -68,7 +29,7 @@ class CLEVRRelDataset(Dataset):
         self.resolution = resolution
         self.random_crop = random_crop
         self.random_flip = random_flip
-        self.data_path = './dataset/clevr_rel_data_128_30000.npz'
+        self.data_path = './dataset/test_clevr_rel_5000_3.npz'
 
         data = np.load(self.data_path)
         self.labels = data['labels']
@@ -121,68 +82,114 @@ class CLEVRRelDataset(Dataset):
         return ' and '.join(paragraphs)
 
 
-dataset = CLEVRRelDataset(128, random_crop=False, random_flip=False)
-labels = th.tensor([[[2, 0, 5, 1, 0, 0, 0, 2, 0, 1, 0], [2, 0, 5, 1, 0, 2, 0, 2, 0, 1, 5]]]).long()
-print(dataset.convert_caption(labels[0]))
+def main():
 
-batch_size = 1
+    parser = argparse.ArgumentParser()
+    defaults = model_and_diffusion_defaults()
+    defaults.update(dict(
+        dataset='clevr_rel',
+        use_fp16=th.cuda.is_available(),
+        timestep_respacing='100',  # use 100 diffusion steps for fast sampling
+        num_classes='4,3,9,3,3,7'
+    ))
+    add_dict_to_argparser(parser, defaults)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--ckpt_path', required=True)
+    parser.add_argument('--output_dir', type=str, default='output')
+    parser.add_argument('--weights', type=float, nargs="+", default=[7.5])
 
-# Tune this parameter to control the sharpness of 256x256 images.
-# A value of 1.0 is sharper, but sometimes results in grainy artifacts.
-# upsample_temp = 0.997
-upsample_temp = 0.980
+    args = parser.parse_args()
 
-##############################
-# Sample from the base model #
-##############################
-labels = [x.squeeze(dim=1) for x in th.chunk(labels, labels.shape[1], dim=1)]
-full_batch_size = batch_size * (len(labels) + 1)
-masks = [True] * len(labels) + [False]
-labels = th.cat((labels + [th.zeros_like(labels[0])]), dim=0)
+    # Setup
+    th.set_float32_matmul_precision('high')
+    th.set_grad_enabled(False)
+    has_cuda = th.cuda.is_available()
+    device = th.device('cpu' if not has_cuda else 'cuda')
 
-weights = args.weights
-if isinstance(weights, float):
-    weights = [weights]
-assert len(weights) == 1 or len(weights) == len(masks) - 1, \
-    "the number of weights should be the same as the number of prompts."
+    options = args_to_dict(args, defaults.keys())
+    model, diffusion = create_model_and_diffusion(**options)
 
-batch_size = 1
-weights = th.tensor(weights).reshape(-1, 1, 1, 1).to(device)
+    model.eval()
+    if options['use_fp16']:
+        model.convert_to_fp16()
+    model.to(device)
 
-model_kwargs = dict(
-    y=labels.clone().detach().to(device),
-    masks=th.tensor(masks, dtype=th.bool, device=device)
-)
+    print(f'Loading checkpoint from {args.ckpt_path}')
+    checkpoint = th.load(args.ckpt_path, map_location='cpu')
+    model.load_state_dict(checkpoint)
+
+    print('Total base parameters', sum(x.numel() for x in model.parameters()))
+
+    # Create output directory
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create dataset and dataloader
+    dataset = CLEVRRelDataset(options["image_size"], random_crop=False, random_flip=False)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+
+    # Sampling function
+    def sample_batch(model, diffusion, labels):
+        # add zeros to the labels for unconditioned sampling
+        labels = th.cat([labels, th.zeros_like(labels[:, :1, :])], dim=1)
+        masks = th.ones_like(labels[:, :, 0], dtype=th.bool)
+        masks[:, -1] = False
+        full_batch_size = labels.shape[0] * labels.shape[1]
+
+        weights = th.tensor(args.weights).reshape(-1, 1, 1, 1).to(device)
+
+        model_kwargs = dict(
+            y=labels.to(device).flatten(0, 1),
+            masks=masks.to(device).flatten(0, 1),
+        )
+
+        def model_fn(x_t, ts, **kwargs):
+            num_relations_per_sample = len(x_t) // args.batch_size
+            half = x_t[::num_relations_per_sample]
+            combined = th.repeat_interleave(half, num_relations_per_sample, dim=0)
+            model_out = model(combined, ts, **kwargs)
+            eps, rest = model_out[:, :3], model_out[:, 3:]
+            masks = kwargs.get('masks')
+            cond_eps, uncond_eps = eps[masks], eps[~masks]
+            uncond_eps = uncond_eps.view(args.batch_size, -1, *uncond_eps.shape[1:])
+            cond_eps = cond_eps.view(args.batch_size, -1, *cond_eps.shape[1:])
+            half_eps = uncond_eps + (weights * (cond_eps - uncond_eps)).sum(dim=1, keepdim=True)
+            # -> (batch_size, 1, 3, H, W)
+            eps = th.repeat_interleave(half_eps, num_relations_per_sample, dim=1).view(-1, *half_eps.shape[2:])
+            return th.cat([eps, rest], dim=1)
+
+        samples = diffusion.p_sample_loop(
+            model_fn,
+            (full_batch_size, 3, options["image_size"], options["image_size"]),
+            device=device,
+            clip_denoised=True,
+            progress=False,
+            model_kwargs=model_kwargs,
+            cond_fn=None,
+        )
+        samples = samples[::labels.shape[1]]
+
+        return samples
+
+    # Sampling loop
+    img_idx = 0
+    for batch_labels, batch_captions in tqdm(dataloader, desc="Generating samples"):
+        samples = sample_batch(model, diffusion, batch_labels)
+        samples = ((samples + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu() / 255.
+
+        # Save individual images with captions
+        for i, (sample, caption) in enumerate(zip(samples, batch_captions)):
+            save_image(sample, output_dir / f'sample_{img_idx:05d}.png')
+            with open(output_dir / f'sample_{img_idx:05d}.txt', 'w') as f:
+                f.write(caption)
+            img_idx += 1
+
+    # Save grid of samples
+    grid = make_grid(samples, nrow=int(np.sqrt(len(samples))), padding=2)
+    save_image(grid, output_dir / f'grid_{options["image_size"]}.png')
+
+    print(f"Generated {len(samples)*args.batch_size} samples. Saved to {output_dir}")
 
 
-def model_fn(x_t, ts, **kwargs):
-    half = x_t[:1]
-    combined = th.cat([half] * kwargs['y'].size(0), dim=0)
-    model_out = model(combined, ts, **kwargs)
-    eps, rest = model_out[:, :3], model_out[:, 3:]
-    masks = kwargs.get('masks')
-    cond_eps, uncond_eps = eps[:-1], eps[-1:]
-    # assume weights are equal to guidance scale
-    half_eps = uncond_eps + (weights * (cond_eps - uncond_eps)).sum(dim=0, keepdim=True)
-    eps = th.cat([half_eps] * x_t.size(0), dim=0)
-    return th.cat([eps, rest], dim=1)
-
-
-# Sample from the base model.
-number_images = 4
-all_samples = []
-for i in range(number_images):
-    samples = diffusion.p_sample_loop(
-        model_fn,
-        (full_batch_size, 3, options["image_size"], options["image_size"]),
-        device=device,
-        clip_denoised=True,
-        progress=True,
-        model_kwargs=model_kwargs,
-        cond_fn=None,
-    )[:batch_size]
-    all_samples.append(samples)
-
-samples = ((th.cat(all_samples, dim=0) + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu() / 255.
-grid = make_grid(samples, nrow=int(samples.shape[0] ** 0.5), padding=0)
-save_image(grid, f'clevr_rel_{options["image_size"]}.png')
+if __name__ == '__main__':
+    main()
