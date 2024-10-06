@@ -19,17 +19,37 @@ from torchvision.utils import make_grid, save_image
 from tqdm.auto import tqdm
 
 
+class CLEVRPosDataset(Dataset):
+    def __init__(
+        self,
+        data_path,
+    ):
+        self.data_path = data_path
+
+        data = np.load(self.data_path)
+        self.labels = data['coords_labels']
+
+    def __len__(self):
+        return self.labels.shape[0]
+
+    def __getitem__(self, index):
+        label = self.labels[index]
+        return label, self.convert_caption(label)
+
+    def convert_caption(self, label):
+        paragraphs = []
+        for j in range(label.shape[0]):
+            x, y = label[j, :2]
+            paragraphs.append(f'object at position {x}, {y}')
+        return ' and '.join(paragraphs)
+
+
 class CLEVRRelDataset(Dataset):
     def __init__(
         self,
-        resolution,
-        random_crop=False,
-        random_flip=False,
+        data_path,
     ):
-        self.resolution = resolution
-        self.random_crop = random_crop
-        self.random_flip = random_flip
-        self.data_path = './dataset/test_clevr_rel_5000_3.npz'
+        self.data_path = data_path
 
         data = np.load(self.data_path)
         self.labels = data['labels']
@@ -86,17 +106,11 @@ def main():
 
     parser = argparse.ArgumentParser()
     defaults = model_and_diffusion_defaults()
-    defaults.update(dict(
-        dataset='clevr_rel',
-        use_fp16=th.cuda.is_available(),
-        timestep_respacing='100',  # use 100 diffusion steps for fast sampling
-        num_classes='4,3,9,3,3,7'
-    ))
     add_dict_to_argparser(parser, defaults)
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--ckpt_path', required=True)
     parser.add_argument('--output_dir', type=str, default='output')
     parser.add_argument('--weights', type=float, nargs="+", default=[7.5])
+    parser.add_argument('--data_path', type=str, default='./dataset/test_clevr_rel_5000_3.npz')
 
     args = parser.parse_args()
 
@@ -107,12 +121,36 @@ def main():
     device = th.device('cpu' if not has_cuda else 'cuda')
 
     options = args_to_dict(args, defaults.keys())
+
+    # Dataset specific options
+    if "clevr_rel" in args.data_path:
+        options.update(dict(
+            dataset='clevr_rel',
+            use_fp16=th.cuda.is_available(),
+            timestep_respacing='100',  # use 100 diffusion steps for fast sampling
+            num_classes='4,3,9,3,3,7'
+        ))
+    elif "clevr_pos" in args.data_path:
+        options.update(dict(
+            dataset='clevr_pos',
+            use_fp16=th.cuda.is_available(),
+            timestep_respacing='100',  # use 100 diffusion steps for fast sampling
+            num_classes='2'
+        ))
+    else:
+        raise ValueError("Unknown dataset")
+
     model, diffusion = create_model_and_diffusion(**options)
 
     model.eval()
     if options['use_fp16']:
         model.convert_to_fp16()
     model.to(device)
+
+    if "clevr_rel" in args.data_path:
+        args.ckpt_path = "models/clevr_rel.pt"
+    elif "clevr_pos" in args.data_path:
+        args.ckpt_path = "models/clevr_pos.pt"
 
     print(f'Loading checkpoint from {args.ckpt_path}')
     checkpoint = th.load(args.ckpt_path, map_location='cpu')
@@ -122,10 +160,17 @@ def main():
 
     # Create output directory
     output_dir = Path(args.output_dir)
+    experiment_name = args.data_path.split('/')[-1].split('.')[0]
+    output_dir = output_dir / experiment_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Create dataset and dataloader
-    dataset = CLEVRRelDataset(options["image_size"], random_crop=False, random_flip=False)
+    if "clevr_pos" in args.data_path:
+        dataset = CLEVRPosDataset(data_path=args.data_path)
+    elif "clevr_rel" in args.data_path:
+        dataset = CLEVRRelDataset(data_path=args.data_path)
+    else:
+        raise ValueError("Unknown dataset")
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
     # Sampling function
@@ -134,25 +179,26 @@ def main():
         labels = th.cat([labels, th.zeros_like(labels[:, :1, :])], dim=1)
         masks = th.ones_like(labels[:, :, 0], dtype=th.bool)
         masks[:, -1] = False
-        full_batch_size = labels.shape[0] * labels.shape[1]
+        batch_size = labels.shape[0]
+        num_relations_per_sample = labels.shape[1]
+        full_batch_size = batch_size * num_relations_per_sample
 
         weights = th.tensor(args.weights).reshape(-1, 1, 1, 1).to(device)
 
         model_kwargs = dict(
-            y=labels.to(device).flatten(0, 1),
+            y=labels.float().to(device).flatten(0, 1),
             masks=masks.to(device).flatten(0, 1),
         )
 
         def model_fn(x_t, ts, **kwargs):
-            num_relations_per_sample = len(x_t) // args.batch_size
             half = x_t[::num_relations_per_sample]
             combined = th.repeat_interleave(half, num_relations_per_sample, dim=0)
             model_out = model(combined, ts, **kwargs)
             eps, rest = model_out[:, :3], model_out[:, 3:]
             masks = kwargs.get('masks')
             cond_eps, uncond_eps = eps[masks], eps[~masks]
-            uncond_eps = uncond_eps.view(args.batch_size, -1, *uncond_eps.shape[1:])
-            cond_eps = cond_eps.view(args.batch_size, -1, *cond_eps.shape[1:])
+            uncond_eps = uncond_eps.view(batch_size, -1, *uncond_eps.shape[1:])
+            cond_eps = cond_eps.view(batch_size, -1, *cond_eps.shape[1:])
             half_eps = uncond_eps + (weights * (cond_eps - uncond_eps)).sum(dim=1, keepdim=True)
             # -> (batch_size, 1, 3, H, W)
             eps = th.repeat_interleave(half_eps, num_relations_per_sample, dim=1).view(-1, *half_eps.shape[2:])
@@ -174,6 +220,11 @@ def main():
     # Sampling loop
     img_idx = 0
     for batch_labels, batch_captions in tqdm(dataloader, desc="Generating samples"):
+        # check if the img is already generated
+        if (output_dir / f'sample_{img_idx:05d}.png').exists():
+            img_idx += len(batch_labels)
+            continue
+
         samples = sample_batch(model, diffusion, batch_labels)
         samples = ((samples + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu() / 255.
 
@@ -186,9 +237,9 @@ def main():
 
     # Save grid of samples
     grid = make_grid(samples, nrow=int(np.sqrt(len(samples))), padding=2)
-    save_image(grid, output_dir / f'grid_{options["image_size"]}.png')
+    save_image(grid, f'{experiment_name}.png')
 
-    print(f"Generated {len(samples)*args.batch_size} samples. Saved to {output_dir}")
+    print(f"Generated {img_idx} samples. Saved to {output_dir}")
 
 
 if __name__ == '__main__':

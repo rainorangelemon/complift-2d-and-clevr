@@ -562,10 +562,11 @@ class UNetModel(nn.Module):
         if self.num_classes:
             # assert y.shape == (x.shape[0],)   # assert for discrete class labels
             if self.dataset == 'clevr_pos':
-                label_emb = th.empty((y.shape[0], self.time_embed_dim), device=y.device)
-                label_emb[masks] = self.label_emb(y[masks])
-                # replace null labels with special embeddings
-                label_emb[~masks] = self.null_emb.weight[0][None].repeat(label_emb[~masks].shape[0], 1)
+                label_emb = th.where(
+                    masks.unsqueeze(1),
+                    self.label_emb(y),
+                    self.null_emb.weight[0][None].repeat(y.shape[0], 1)
+                )
                 emb = emb + label_emb
             elif self.dataset == 'clevr_rel':
                 assert masks is not None, "masks are not provided for training relational clevr data."
