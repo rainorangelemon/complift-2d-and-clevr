@@ -1,12 +1,16 @@
 import torch
 from typing import List, Union, Tuple, Callable
 import numpy as np
+import ComposableDiff.composable_diffusion
+import ComposableDiff.composable_diffusion.gaussian_diffusion
+import ComposableDiff.composable_diffusion.respace
 from bootstrapping import (
 bootstrapping_and_get_max,
 bootstrapping_and_get_interval
 )
 from ddpm import device, NoiseScheduler
 from ddpm import EnergyMLP, CompositionEnergyMLP
+import ComposableDiff
 
 
 def intermediate_distribution(data_points: np.ndarray,
@@ -71,14 +75,16 @@ def calculate_threshold_multiple_timesteps(samples, model, confidence=0.999):
     return extreme_values
 
 
-def calculate_interval(samples: np.ndarray,
-                       model: Union[EnergyMLP, CompositionEnergyMLP],
+def calculate_interval(samples: torch.Tensor,
+                       denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                       energy_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                        confidence: float=0.999) -> Tuple[float, float]:
     """calculate the interval of the samples.
 
     Args:
-        samples (np.ndarray): samples (n_samples, n_features)
-        model (Union[EnergyMLP, CompositionEnergyMLP]): energy model
+        samples (torch.Tensor): samples (n_samples, n_features)
+        denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): denoising function
+        energy_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): energy function
         confidence (float, optional): confidence level. Defaults to 0.999.
 
     Returns:
@@ -86,7 +92,7 @@ def calculate_interval(samples: np.ndarray,
     """
     # calculate the level-set values
     with torch.no_grad():
-        energy_on_data = model.energy(torch.from_numpy(samples).to(device), torch.zeros(len(samples)).long().to(device))
+        energy_on_data = energy_fn(denoise_fn, samples, torch.zeros(len(samples)).long().to(device))
     extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy(), confidence=confidence)
     return extreme_value_l, extreme_value_r
 
@@ -228,12 +234,71 @@ def calculate_denoising_matching_term(x_k: torch.Tensor,
     noise_t_coeff = torch.sqrt(1 - cumprod_alpha_k) / torch.sqrt(cumprod_alpha_t - cumprod_alpha_k)
     # -> (batch,)
 
-    return x_k_coeff[:, None] * x_k + noise_t_coeff[:, None] * true_noise_at_t - pred_noise_at_k
+    if len(pred_noise_at_k.shape) > 2:  # an image
+        pred_noise_at_k = pred_noise_at_k[:, :3]  # only use the first 3 channels, no learned sigma
+
+    x_k_coeff = x_k_coeff.reshape(-1, *([1] * (len(x_k.shape) - 1)))
+    noise_t_coeff = noise_t_coeff.reshape(-1, *([1] * (len(x_k.shape) - 1)))
+
+    return x_k_coeff * x_k + noise_t_coeff * true_noise_at_t - pred_noise_at_k
+
+
+def add_noise_at_t(noise_scheduler: ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
+                   x_t: torch.Tensor,
+                   x_noise: torch.Tensor,
+                   timesteps_t: torch.Tensor,
+                   timesteps_k: torch.Tensor) -> torch.Tensor:
+    """add noise to the sample at time t
+
+    Args:
+        noise_scheduler (ComposableDiff.composable_diffusion.respace.SpacedDiffusion): noise scheduler
+        x_t (torch.Tensor): the sample at time t (batch_size, feature_size)
+        x_noise (torch.Tensor): add noise to the sample (batch_size, feature_size)
+        timesteps_t (torch.Tensor): the timesteps where x_t is at (batch_size,)
+        timesteps_k (torch.Tensor): the timesteps to add noise (batch_size,)
+
+    Returns:
+        torch.Tensor: the noisy sample (batch_size, feature_size)
+    """
+    assert (timesteps_t <= timesteps_k).all(), "timesteps_t should be less than or equal to timesteps_k"
+
+    device = x_t.device
+    B, T = x_t.size(0), noise_scheduler.num_timesteps
+
+    timesteps_t = timesteps_t.to(device)
+    timesteps_k = timesteps_k.to(device)
+    alphas = 1 - noise_scheduler.betas
+    log_alphas = torch.log(torch.from_numpy(alphas).to(device))
+    # -> (T,)
+    log_alphas_batched = log_alphas[None, :].repeat(B, 1)
+    log_alphas_batched = log_alphas_batched.to(device)
+    # -> (batch_size, T)
+    is_earlier_timesteps = (torch.arange(T, device=device)[None, :] < timesteps_t[:, None])
+    log_alphas_batched[is_earlier_timesteps] = 0
+    log_alphas_cumsum = torch.cumsum(log_alphas_batched, dim=-1)
+    # -> (batch_size, T)
+    alphas_cumprod = torch.exp(log_alphas_cumsum)
+    sqrt_alphas_cumprod = alphas_cumprod ** 0.5
+    # -> (batch_size, T)
+    sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
+    # -> (batch_size, T)
+
+    s1 = sqrt_alphas_cumprod[torch.arange(B, device=device), timesteps_k]
+    s2 = sqrt_one_minus_alphas_cumprod[torch.arange(B, device=device), timesteps_k]
+
+    s1 = s1.reshape(-1, *([1] * (len(x_t.shape) - 1)))
+    s2 = s2.reshape(-1, *([1] * (len(x_t.shape) - 1)))
+
+    s1 = s1.to(device).float()
+    s2 = s2.to(device).float()
+
+    return s1 * x_t + s2 * x_noise
 
 
 @torch.no_grad()
 def calculate_elbo(model: torch.nn.Module,
-                   noise_scheduler: NoiseScheduler,
+                   noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
+                                          ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
                    x_t: torch.Tensor,
                    t: int,
                    n_samples: int,
@@ -243,9 +308,10 @@ def calculate_elbo(model: torch.nn.Module,
 
     Args:
         model (torch.nn.Module): a diffusion model
+        noise_scheduler (Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
+                               ComposableDiff.composable_diffusion.respace.SpacedDiffusion]): noise scheduler
         x_t (torch.Tensor): samples (batch, n_features)
         t (int): timestep where x_t is at
-        T (int): total number of timesteps
         n_samples (int): number of samples used for Monte Carlo estimation
         cumprod_alpha (torch.Tensor): cumulative product of alpha (T,)
         seed (int): random seed
@@ -257,35 +323,44 @@ def calculate_elbo(model: torch.nn.Module,
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
 
-    B, D = x_t.shape
+    if isinstance(noise_scheduler, ComposableDiff.composable_diffusion.respace.SpacedDiffusion):
+        noise_scheduler = noise_scheduler.base_diffusion
+
+    B, *D = x_t.shape
 
     # sample noise (batch, n_sample, n_features)
-    noise = torch.randn(B, n_samples, D, device=x_t.device)
+    noise = torch.randn(1, n_samples, *D, device=x_t.device).expand(B, n_samples, *D)
 
     # sample timestep randomly from [t, T): (batch, n_sample)
-    T = len(noise_scheduler)
+    T = noise_scheduler.num_timesteps
     ts_k = torch.randint(t, T, (B, n_samples), device=x_t.device)
     reshaped_ts_k = ts_k.reshape(B*n_samples)
     reshaped_ts_t = torch.full((B*n_samples,), t, device=x_t.device)
 
     # sample x_k from p(x_k | x_t, t, k) (batch, n_sample, n_features)
-    reshaped_x_t = x_t[:, None, :].expand(B, n_samples, D).reshape(B*n_samples, D)
-    reshaped_noise = noise.reshape(B*n_samples, D)
-    x_k = noise_scheduler.add_noise_at_t(reshaped_x_t, reshaped_noise, reshaped_ts_t, reshaped_ts_k)
-    x_k = x_k.reshape(B, n_samples, D)
+    reshaped_x_t = x_t[:, None, :].expand(B, n_samples, *D).reshape(B*n_samples, *D)
+    reshaped_noise = noise.reshape(B*n_samples, *D)
+    x_k = add_noise_at_t(noise_scheduler, reshaped_x_t, reshaped_noise, reshaped_ts_t, reshaped_ts_k)
+    x_k = x_k.reshape(B, n_samples, *D)
     # -> (batch, n_sample, n_features)
 
     # estimate the ELBO
-    cumprod_alpha_prev = noise_scheduler.alphas_cumprod_prev.to(x_t.device)
-    cumprod_alpha = noise_scheduler.alphas_cumprod.to(x_t.device)
+    cumprod_alpha_prev = torch.from_numpy(noise_scheduler.alphas_cumprod_prev).to(x_t.device).float()
+    cumprod_alpha = torch.from_numpy(noise_scheduler.alphas_cumprod).to(x_t.device).float()
 
-    denoising_matching_term_list = []
-    for i in range(0, n_samples, mini_batch):
+    denoising_matching_terms = torch.zeros(B * n_samples, device=x_t.device)
+
+    vectorized_x_k = x_k.flatten(0, 1)
+    vectorized_ts_k = ts_k.flatten()
+    vectorized_noise = noise.flatten(0, 1)
+    vectorized_ts_t = torch.full((B * n_samples,), t, device=x_t.device)
+
+    for i in range(0, B * n_samples, mini_batch):
         # Prepare mini-batch
-        batch_x_k = x_k[:, i:i+mini_batch, :].reshape(-1, D)
-        batch_ts_k = ts_k[:, i:i+mini_batch].reshape(-1)
-        batch_noise = noise[:, i:i+mini_batch, :].reshape(-1, D)
-        batch_ts_t = torch.full((B * min(mini_batch, n_samples - i),), t, device=x_t.device)
+        batch_x_k = vectorized_x_k[i:i + mini_batch]
+        batch_ts_k = vectorized_ts_k[i:i + mini_batch]
+        batch_noise = vectorized_noise[i:i + mini_batch]
+        batch_ts_t = vectorized_ts_t[i:i + mini_batch]
 
         # Model prediction
         batch_noise_pred = model(batch_x_k, batch_ts_k)
@@ -298,12 +373,12 @@ def calculate_elbo(model: torch.nn.Module,
             cumprod_alpha_k=cumprod_alpha[batch_ts_k]
         )
         # -> (batch * min(mini_batch, n_samples - i), n_features)
-        batch_term = batch_term.pow(2).mean(dim=-1)
+        batch_term = batch_term.pow(2).view(batch_term.shape[0], -1).mean(dim=1)
         # -> (batch * min(mini_batch, n_samples - i),)
-        denoising_matching_term_list.append(batch_term.view(B, -1))
+        denoising_matching_terms[i:i + mini_batch] = batch_term
         # -> (batch, min(mini_batch, n_samples - i))
 
-    denoising_matching_term = torch.cat(denoising_matching_term_list, dim=1)
+    denoising_matching_term = denoising_matching_terms.view(B, n_samples)
     assert denoising_matching_term.shape == (B, n_samples)
     # -> (batch, n_sample)
     denoising_matching_term = denoising_matching_term.mean(dim=1)
