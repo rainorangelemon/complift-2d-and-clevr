@@ -3,7 +3,7 @@ import numpy as np
 import torchvision.utils as tvu
 
 from diffusers import LMSDiscreteScheduler, DDIMScheduler, DDPMScheduler, PNDMScheduler
-from composable_diffusion.composable_stable_diffusion.pipeline_composable_stable_diffusion import \
+from ComposableDiff.composable_diffusion.composable_stable_diffusion.pipeline_composable_stable_diffusion import \
     ComposableStableDiffusionPipeline
 
 import argparse

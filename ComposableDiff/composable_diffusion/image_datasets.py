@@ -20,7 +20,7 @@ from torchvision.datasets.utils import verify_str_arg
 from functools import partial
 from typing import Any, Callable, List, Optional, Union, Tuple
 
-from composable_diffusion.download import download_data
+from ComposableDiff.composable_diffusion.download import download_data
 
 
 def center_crop_arr(pil_image, image_size):

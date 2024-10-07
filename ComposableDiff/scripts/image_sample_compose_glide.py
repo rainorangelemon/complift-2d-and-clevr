@@ -2,8 +2,8 @@ from PIL import Image
 import torch as th
 import argparse
 
-from composable_diffusion.download import load_checkpoint
-from composable_diffusion.model_creation import (
+from ComposableDiff.composable_diffusion.download import load_checkpoint
+from ComposableDiff.composable_diffusion.model_creation import (
     create_model_and_diffusion,
     model_and_diffusion_defaults,
     model_and_diffusion_defaults_upsampler

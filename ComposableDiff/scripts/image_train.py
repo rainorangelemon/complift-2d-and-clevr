@@ -5,16 +5,16 @@ import os
 import argparse
 import json
 
-from composable_diffusion import dist_util, logger
-from composable_diffusion.image_datasets import load_data
-from composable_diffusion.resample import create_named_schedule_sampler
-from composable_diffusion.model_creation import (
+from ComposableDiff.composable_diffusion import dist_util, logger
+from ComposableDiff.composable_diffusion.image_datasets import load_data
+from ComposableDiff.composable_diffusion.resample import create_named_schedule_sampler
+from ComposableDiff.composable_diffusion.model_creation import (
     model_and_diffusion_defaults,
     create_model_and_diffusion,
     args_to_dict,
     add_dict_to_argparser,
 )
-from composable_diffusion.train_util import TrainLoop
+from ComposableDiff.composable_diffusion.train_util import TrainLoop
 
 
 def main():

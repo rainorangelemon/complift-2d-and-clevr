@@ -1,17 +1,17 @@
 import argparse
 
-from composable_diffusion import gaussian_diffusion as gd
-from composable_diffusion.gaussian_diffusion import get_named_beta_schedule
-from composable_diffusion.respace import SpacedDiffusion, space_timesteps
-from composable_diffusion.text2im_model import (
+from ComposableDiff.composable_diffusion import gaussian_diffusion as gd
+from ComposableDiff.composable_diffusion.gaussian_diffusion import get_named_beta_schedule
+from ComposableDiff.composable_diffusion.respace import SpacedDiffusion, space_timesteps
+from ComposableDiff.composable_diffusion.text2im_model import (
     InpaintText2ImUNet,
     SuperResInpaintText2ImUnet,
     SuperResText2ImUNet,
     Text2ImUNet,
 )
 
-from composable_diffusion.unet import UNetModel, SuperResUNetModel
-from composable_diffusion.tokenizer.bpe import get_encoder
+from ComposableDiff.composable_diffusion.unet import UNetModel, SuperResUNetModel
+from ComposableDiff.composable_diffusion.tokenizer.bpe import get_encoder
 
 
 def model_and_diffusion_defaults():

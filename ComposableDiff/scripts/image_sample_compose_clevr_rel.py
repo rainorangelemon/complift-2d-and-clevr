@@ -3,13 +3,13 @@ import numpy as np
 import argparse
 import torch as th
 
-from composable_diffusion.model_creation import (
+from ComposableDiff.composable_diffusion.model_creation import (
     create_model_and_diffusion,
     model_and_diffusion_defaults,
     add_dict_to_argparser,
     args_to_dict
 )
-from composable_diffusion.image_datasets import load_data
+from ComposableDiff.composable_diffusion.image_datasets import load_data
 
 from PIL import Image
 from pathlib import Path
