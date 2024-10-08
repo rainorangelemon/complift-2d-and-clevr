@@ -198,17 +198,6 @@ def main(cfg: DictConfig):
             callback=None,
         )[-1]
 
-        samples, filter_ratios, intervals = baselines_clevr.rejection_sampling_baseline_with_interval_calculation_elbo(
-            composed_denoise_fn=composed_model_fn,
-            conditions_denoise_fn=conditions_denoise_fn_factory(labels),
-            x_shape=(3, options["image_size"], options["image_size"]),
-            algebras=["product"]*(num_relations_per_sample-1),
-            noise_scheduler=diffusion,
-            eval_batch_size=cfg.support_interval_sample_number,
-            n_sample_for_elbo=cfg.n_sample_for_elbo,
-            mini_batch=cfg.mini_batch,
-        )
-
         return samples
 
     # Sampling loop
@@ -233,6 +222,9 @@ def main(cfg: DictConfig):
             with open(output_dir / f'sample_{img_idx:05d}.txt', 'w') as f:
                 f.write(caption)
             img_idx += 1
+
+        if img_idx >= cfg.max_samples_for_generation:
+            break
 
     print(f"Generated {img_idx} samples. Saved to {output_dir}")
 

@@ -13,16 +13,22 @@ def bootstrapping_and_get_max(data, n=1000, confidence=0.999):
     return 2*rho-percentile_value
 
 
-def bootstrapping_and_get_interval(data, n=1000, confidence=0.999):
+def bootstrapping_and_get_interval(data, n=None, confidence=None):
     if len(data) == 0:
         return [float('inf'), float('-inf')]
+
+    if n is None:
+        n = len(data)
+
+    if confidence is None:
+        confidence = 1 / n
 
     rho = [data.min(), data.max()]
 
     samples = np.random.choice(data, size=len(data)*n, replace=True)
     samples = samples.reshape(n, len(data))
-    
-    # get the 99.9% confidence interval
+
+    # get the pivot confidence interval
     percentile_min = np.percentile(np.min(samples, axis=1), confidence)
     percentile_max = np.percentile(np.max(samples, axis=1), 1-confidence)
     return [2*rho[0]-percentile_min, 2*rho[1]-percentile_max]

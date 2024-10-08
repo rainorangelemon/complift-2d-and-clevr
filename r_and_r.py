@@ -78,7 +78,7 @@ def calculate_threshold_multiple_timesteps(samples, model, confidence=0.999):
 def calculate_interval(samples: torch.Tensor,
                        denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                        energy_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-                       confidence: float=0.999) -> Tuple[float, float]:
+                    ) -> Tuple[float, float]:
     """calculate the interval of the samples.
 
     Args:
@@ -93,7 +93,7 @@ def calculate_interval(samples: torch.Tensor,
     # calculate the level-set values
     with torch.no_grad():
         energy_on_data = energy_fn(denoise_fn, samples, torch.zeros(len(samples)).long().to(device))
-    extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy(), confidence=confidence)
+    extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy())
     return extreme_value_l, extreme_value_r
 
 
@@ -333,7 +333,8 @@ def calculate_elbo(model: torch.nn.Module,
 
     # sample timestep randomly from [t, T): (batch, n_sample)
     T = noise_scheduler.num_timesteps
-    ts_k = torch.randint(t, T, (B, n_samples), device=x_t.device)
+    ts_k = torch.randint(t, T, (1, n_samples), device=x_t.device).expand(B, n_samples)
+
     reshaped_ts_k = ts_k.reshape(B*n_samples)
     reshaped_ts_t = torch.full((B*n_samples,), t, device=x_t.device)
 

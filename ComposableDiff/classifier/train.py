@@ -16,11 +16,11 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 from tqdm import tqdm
-from model import ResNetModel
+from ComposableDiff.classifier.model import ResNetModel
 
 from torch.utils.data import Dataset, DataLoader
 
-from datasets import Clevr2DPosDataset, FFHQSubdataset, ClevrRelDataset, CelebA128dataset
+from ComposableDiff.classifier.datasets import Clevr2DPosDataset, FFHQSubdataset, ClevrRelDataset, CelebA128dataset
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -148,7 +148,7 @@ def train_model(
                     logits = model(inputs, attr)
 
                     loss = criterion(logits, labels[:,0].long())
-                    
+
                     if phase == 'train':
                         loss.backward()
                         optimizer.step()

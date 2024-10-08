@@ -10,9 +10,8 @@ from tqdm import tqdm
 from pathlib import Path
 
 from torch.utils.data import Dataset, DataLoader
-from model import ResNetModel
-from datasets import random_crop_arr, center_crop_arr
-import pdb
+from ComposableDiff.classifier.model import ResNetModel
+from ComposableDiff.classifier.datasets import random_crop_arr, center_crop_arr
 
 class ClassificationDataset(Dataset):
     def __init__(

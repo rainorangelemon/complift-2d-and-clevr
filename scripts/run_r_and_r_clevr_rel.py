@@ -1,6 +1,7 @@
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import numpy as np
+from typing import Union
 
 import argparse
 import torch as th
@@ -12,6 +13,7 @@ from ComposableDiff.composable_diffusion.model_creation import (
     args_to_dict
 )
 from ComposableDiff.composable_diffusion.image_datasets import load_data
+from ComposableDiff.classifier.eval import load_classifier
 import baselines_clevr
 
 from PIL import Image
@@ -20,6 +22,7 @@ from pathlib import Path
 from torch.utils.data import DataLoader, Dataset
 from torchvision.utils import make_grid, save_image
 from tqdm.auto import tqdm
+import wandb
 
 
 class CLEVRPosDataset(Dataset):
@@ -105,9 +108,44 @@ class CLEVRRelDataset(Dataset):
         return ' and '.join(paragraphs)
 
 
+@th.no_grad()
+def calculate_classification_score(classifier: th.nn.Module,
+                                   samples: th.Tensor,
+                                   labels: th.Tensor,
+                                   device: Union[th.device, str]):
+    """calculate the classification score
+
+    Args:
+        classifier (th.nn.Module): the classifier
+        samples (th.Tensor): samples to be classified, range in [-1, 1], (N, C, H, W)
+        labels (th.Tensor): labels for the samples, (M, D)
+        device (Union[th.device, str]): device to run the calculation
+    """
+    assert samples.dim() == 4, f"Samples should be in shape (N, C, H, W), got {samples.shape}"
+    assert labels.dim() == 2, f"Labels should be in shape (M, D), got {labels.shape}"
+    samples = samples.to(device)
+    labels = labels.to(device)
+    # scale the samples from [-1, 1] to [0, 1]
+    samples = ((samples + 1) * 127.5).round().clamp(0, 255).to(th.uint8) / 255.
+
+    result = th.zeros((samples.shape[0],), dtype=th.long, device=device)
+    for label in labels:
+        label = label.unsqueeze(0).expand(samples.shape[0], -1).to(device)
+        outputs = classifier(samples, label)
+        result += (outputs[:,0] < outputs[:,1]).long()
+    corrects = th.sum(result == len(labels))
+    return corrects.clone().cpu().item()
+
+
 @hydra.main(config_path="../conf")
 def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
+    path_of_dataset = cfg.data_path
+    name_of_dataset = path_of_dataset.split("/")[-1].split(".")[0]
+    wandb.init(project="r_and_r",
+               name=f"{name_of_dataset}_{cfg.support_interval_sample_number}x{cfg.n_sample_for_elbo}",
+               # to dict
+               config=OmegaConf.to_container(cfg, resolve=True))
 
     # Setup
     th.set_float32_matmul_precision('high')
@@ -147,23 +185,29 @@ def main(cfg: DictConfig):
         raise ValueError("Unknown dataset")
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
+
+    # import classifier
+    classifier = load_classifier(**cfg.classifier)
+    classifier.eval()
+    classifier.to(device)
+
     # Sampling function
-    def sample_batch(model, diffusion, labels):
+    def sample_batch(global_step, model, diffusion, labels):
         # add zeros to the labels for unconditioned sampling
-        labels = th.cat([labels, th.zeros_like(labels[:, :1, :])], dim=1)
-        masks = th.ones_like(labels[:, :, 0], dtype=th.bool)
+        labels = th.cat([labels, th.zeros_like(labels[:, :1, :])], dim=1).to(device)
+        masks = th.ones_like(labels[:, :, 0], dtype=th.bool).to(device)
         masks[:, -1] = False
         num_relations_per_sample = labels.shape[1]
 
         def conditions_denoise_fn_factory(labels, batch_size=cfg.mini_batch):
-            conditions_denoise_fns = []
+            def create_condition_denoise_fn(rel_idx):
+                def condition_denoise_fn(x_t, ts, use_cfg=False, batch_size=batch_size):
+                    current_label = labels[:, rel_idx, :].to(device)
+                    current_mask = masks[:, rel_idx].to(device)
 
-            for rel_idx in range(num_relations_per_sample-1):  # ignore the unconditioned label
-                current_label = labels[:, rel_idx, :].to(device)
-                current_mask = masks[:, rel_idx].to(device)
-
-                def condition_denoise_fn(x_t, ts, batch_size=batch_size):
                     num_samples = x_t.shape[0]
+                    if use_cfg:
+                        batch_size = batch_size // 2
                     results = []
 
                     for i in range(0, num_samples, batch_size):
@@ -176,16 +220,26 @@ def main(cfg: DictConfig):
                         expanded_label = current_label.expand(current_batch_size, -1)
                         expanded_mask = current_mask.expand(current_batch_size)
 
-                        # Run the model on the current batch and collect the result
-                        result = model(x_t_batch, ts_batch, y=expanded_label, masks=expanded_mask)
+                        if use_cfg:
+                            # Add the unconditioned label
+                            x_t_batch = th.cat([x_t_batch, x_t_batch], dim=0)
+                            ts_batch = th.cat([ts_batch, ts_batch], dim=0)
+                            expanded_label = th.cat([expanded_label, th.zeros_like(expanded_label)], dim=0)
+                            expanded_mask = th.cat([expanded_mask, th.zeros_like(expanded_mask)], dim=0)
+                            result = model(x_t_batch, ts_batch, y=expanded_label, masks=expanded_mask)
+                            eps, rest = result[:, :3], result[:, 3:]
+                            cond_eps, uncond_eps = eps[expanded_mask], eps[~expanded_mask]
+                            eps = uncond_eps + (cfg.cfg_weight * (cond_eps - uncond_eps))
+                            result = th.cat([eps, rest[~expanded_mask]], dim=1)
+                        else:
+                            result = model(x_t_batch, ts_batch, y=expanded_label, masks=expanded_mask)
                         results.append(result)
 
                     # Concatenate the results from all batches
                     return th.cat(results, dim=0)
+                return condition_denoise_fn
 
-                conditions_denoise_fns.append(condition_denoise_fn)
-
-            return conditions_denoise_fns
+            return [create_condition_denoise_fn(rel_idx) for rel_idx in range(num_relations_per_sample)]
 
         def composed_model_fn(x_t, ts, batch_size=cfg.mini_batch // num_relations_per_sample):
             num_samples = x_t.shape[0]
@@ -225,9 +279,12 @@ def main(cfg: DictConfig):
 
             return th.cat([eps, rest], dim=1)
 
-        samples, filter_ratios, intervals = baselines_clevr.rejection_sampling_baseline_with_interval_calculation_elbo(
+
+        conditions_denoise_fn = conditions_denoise_fn_factory(labels)
+        samples, filter_ratios, intervals, samples_per_condition, unfiltered_samples = baselines_clevr.best_of_n_sampling_baseline_with_interval_calculation_elbo(
             composed_denoise_fn=composed_model_fn,
-            conditions_denoise_fn=conditions_denoise_fn_factory(labels),
+            unconditioned_denoise_fn=conditions_denoise_fn[-1],
+            conditions_denoise_fn=conditions_denoise_fn[:-1],
             x_shape=(3, options["image_size"], options["image_size"]),
             algebras=["product"]*(num_relations_per_sample-1),
             noise_scheduler=diffusion,
@@ -236,19 +293,52 @@ def main(cfg: DictConfig):
             mini_batch=cfg.mini_batch,
         )
 
+        for condition_idx, dataset_per_condition, label in zip(range(len(samples_per_condition)), samples_per_condition, labels[0, :-1]):
+            corrects = calculate_classification_score(classifier, dataset_per_condition, label[None, ...], device)
+            print(f"Corrects for condition {condition_idx}: {corrects}/{len(dataset_per_condition)}")
+            wandb.log({f"acc/condition_{condition_idx}": corrects / len(dataset_per_condition),
+                        "global_step": global_step})
+
+        final_unfiltered_sample = unfiltered_samples[-1]
+        if len(final_unfiltered_sample) == 0:
+            final_unfiltered_sample = th.zeros((1, 3, options["image_size"], options["image_size"]), device=device)
+
+        final_sample = samples[-1]
+        if len(final_sample) == 0:
+            final_sample = th.zeros((1, 3, options["image_size"], options["image_size"]), device=device)
+
+        # Calculate the classification score
+        corrects_unfiltered = calculate_classification_score(classifier, final_unfiltered_sample, labels[0, :-1], device)
+        print(f"Corrects unfiltered: {corrects_unfiltered}/{len(final_unfiltered_sample)}")
+
+        corrects = calculate_classification_score(classifier, final_sample, labels[0, :-1], device)
+        print(f"Corrects: {corrects}/{len(final_sample)}")
+
         print(f"Filter ratios: {filter_ratios}")
 
-        return samples[-1]
+        info = {"acc/final_unfiltered": corrects_unfiltered / len(final_unfiltered_sample),
+                "acc/final_filtered": corrects / len(final_sample),
+                "filter_ratios/final": filter_ratios[-1],
+                "global_step": global_step}
+
+        return final_sample, info
 
     # Sampling loop
     img_idx = 0
+    list_acc_unfiltered = []
+    list_acc_filtered = []
     for batch_labels, batch_captions in dataloader:
         # check if the img is already generated
         if (output_dir / f'sample_{img_idx:05d}.png').exists():
             img_idx += len(batch_labels)
             continue
 
-        samples = sample_batch(model, diffusion, batch_labels)
+        samples, info = sample_batch(img_idx, model, diffusion, batch_labels)
+
+        list_acc_unfiltered.append(info["acc/final_unfiltered"])
+        list_acc_filtered.append(info["acc/final_filtered"])
+
+        samples = samples[th.randint(0, len(samples), size=(1,))]
         samples = ((samples + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu() / 255.
 
         if img_idx == 0:
@@ -261,7 +351,15 @@ def main(cfg: DictConfig):
         save_image(grid, output_dir / f'sample_{img_idx:05d}.png')
         with open(output_dir / f'sample_{img_idx:05d}.txt', 'w') as f:
             f.write(batch_captions[0])
+        wandb.log({"sample": [wandb.Image(Image.open(output_dir / f'sample_{img_idx:05d}.png'), caption=batch_captions[0])],
+                   "global_step": img_idx,
+                   "avg_acc/final_unfiltered": np.mean(list_acc_unfiltered),
+                   "avg_acc/final_filtered": np.mean(list_acc_filtered),
+                   **info})
         img_idx += 1
+
+        if img_idx >= cfg.max_samples_for_generation:
+            break
 
     print(f"Generated {img_idx} samples. Saved to {output_dir}")
 
