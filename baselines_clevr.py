@@ -356,7 +356,7 @@ def best_of_n_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
     assert all([algebra == "product" for algebra in algebras]), "only support product algebra for now, but got {}".format(algebras)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    def estimate_neg_logp(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+    def estimate_logp(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                           x: torch.Tensor,
                           t: torch.Tensor):
         if x.shape[0] == 0:
@@ -377,7 +377,7 @@ def best_of_n_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
                                 seed=t[0],
                                 mini_batch=mini_batch)
         log_pc_given_x = log_px_given_c - log_px
-        return -log_pc_given_x
+        return log_pc_given_x
 
     # datasets = [diffusion_baseline(lambda x, t: condition_denoise_fn(x, t, use_cfg=True),
     #                                noise_scheduler, x_shape,
@@ -405,9 +405,9 @@ def best_of_n_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
     def callback(x, t):
         unfiltered_samples.append(x.clone().cpu())
         if (t == 0).all():
-            energies = [estimate_neg_logp(denoise_fn, x, t) for denoise_fn in conditions_denoise_fn]
-            best_idx = torch.argmin(torch.stack(energies).sum(dim=0), dim=0)
-            x = x[[best_idx]].expand(x.shape)
+            energies = [estimate_logp(denoise_fn, x, t) for denoise_fn in conditions_denoise_fn]
+            best_idx = torch.argmax(torch.stack(energies).sum(dim=0), dim=0)
+            x = x[None, best_idx].expand(x.shape)
             filter_ratios.append((len(x) - 1) / len(x))
 
         return x
