@@ -1,5 +1,7 @@
 import numpy as np
 from tqdm.auto import tqdm
+from typing import List
+
 
 def bootstrapping_and_get_max(data, n=1000, confidence=0.999):
     rho = data.max()
@@ -13,22 +15,47 @@ def bootstrapping_and_get_max(data, n=1000, confidence=0.999):
     return 2*rho-percentile_value
 
 
-def bootstrapping_and_get_interval(data, n=None, confidence=None):
+def bootstrapping_and_get_interval(data: np.ndarray,
+                                   method: str,
+                                   confidence: float,
+                                   n: int=None) -> List[float]:
+    """bootstrapping, and get the confidence interval
+
+    Args:
+        data (np.ndarray): the data
+        method (str): the method to use.
+        confidence (float): the confidence level.
+        n (int, optional): the number of samples. Defaults to None.
+
+    Returns:
+        List[float]: the confidence interval, [lower, upper]
+
+    """
+    assert method in ["simple", "normal", "pivot"], "method should be simple, normal or pivot"
+
     if len(data) == 0:
-        return [float('inf'), float('-inf')]
+        interval = [float('inf'), float('-inf')]
 
-    if n is None:
-        n = len(data)
+    elif method == "simple":
+        interval = [data.min(), data.max()]
 
-    if confidence is None:
-        confidence = 1 / n
+    elif method == "normal":
+        required_samples = int(2/(1-confidence))
+        if len(data) < required_samples:
+            data = np.random.choice(data, size=required_samples, replace=True)
+        interval = [np.percentile(data, 100*(1-confidence)/2), np.percentile(data, 100*(1+confidence)/2)]
 
-    rho = [data.min(), data.max()]
+    else:
+        if n is None:
+            required_samples = int(2/(1-confidence))
+            n = required_samples
 
-    samples = np.random.choice(data, size=len(data)*n, replace=True)
-    samples = samples.reshape(n, len(data))
+        samples = np.random.choice(data, size=n, replace=True)
 
-    # get the pivot confidence interval
-    percentile_min = np.percentile(np.min(samples, axis=1), confidence)
-    percentile_max = np.percentile(np.max(samples, axis=1), 1-confidence)
-    return [2*rho[0]-percentile_min, 2*rho[1]-percentile_max]
+        # get the pivot confidence interval
+        percentile_min = np.percentile(samples, 100*(1-confidence)/2)
+        percentile_max = np.percentile(samples, 100*(1+confidence)/2)
+        avg = np.mean(samples)
+        interval = [2*avg-percentile_max, 2*avg-percentile_min]
+
+    return interval

@@ -281,12 +281,27 @@ def main(cfg: DictConfig):
 
 
         conditions_denoise_fn = conditions_denoise_fn_factory(labels)
-        samples, filter_ratios, intervals, samples_per_condition, unfiltered_samples = baselines_clevr.best_of_n_sampling_baseline_with_interval_calculation_elbo(
+
+        if cfg.method_name == "rejection":
+            method = baselines_clevr.rejection_sampling_baseline_with_interval_calculation_elbo
+        elif cfg.method_name == "best_of_n":
+            method = baselines_clevr.best_of_n_sampling_baseline_with_interval_calculation_elbo
+        elif cfg.method_name == "baseline":
+            method = lambda **kwargs: baselines_clevr.diffusion_baseline(
+                denoise_fn=kwargs["composed_denoise_fn"],
+                diffusion=kwargs["noise_scheduler"],
+                x_shape=kwargs["x_shape"],
+                eval_batch_size=1,
+            )
+
+        samples, filter_ratios, intervals, samples_per_condition, unfiltered_samples = \
+        method(
             composed_denoise_fn=composed_model_fn,
             unconditioned_denoise_fn=conditions_denoise_fn[-1],
             conditions_denoise_fn=conditions_denoise_fn[:-1],
             x_shape=(3, options["image_size"], options["image_size"]),
             algebras=["product"]*(num_relations_per_sample-1),
+            bootstrap_cfg=cfg.bootstrap,
             noise_scheduler=diffusion,
             eval_batch_size=cfg.support_interval_sample_number,
             n_sample_for_elbo=cfg.n_sample_for_elbo,

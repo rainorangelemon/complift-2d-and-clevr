@@ -1,0 +1,65 @@
+defaults:
+  - _self_
+
+method_name: ???  # choose among {baseline, rejection, best_of_n}
+num_constraints: ??? # choose among {1, 2, 3}
+ckpt_path: ComposableDiff/models/${model.dataset}.pt
+data_path: ComposableDiff/dataset/test_${model.dataset}_5000_${num_constraints}.npz
+output_dir: runs/test_${method_name}_${support_interval_sample_number}x${n_sample_for_elbo}
+
+# for inference
+batch_size: 32
+cfg_weight: 7.5
+
+# for rejection sampling
+support_interval_sample_number: 50
+n_sample_for_elbo: 8
+mini_batch: 100
+
+# for evaluation
+max_samples_for_generation: 100
+
+bootstrap:
+  confidence: 0.99
+  method: normal
+
+classifier:
+  checkpoint_dir: ComposableDiff/models
+  dataset: ${model.dataset}
+  im_size: ${model.image_size}
+  filter_dim: 64
+
+model:
+  image_size: 128
+  num_channels: 192
+  num_res_blocks: 2
+  channel_mult: ""
+  num_heads: 1
+  num_head_channels: 64
+  num_heads_upsample: -1
+  attention_resolutions: "32,16,8"
+  dropout: 0.1
+  text_ctx: 128
+  xf_width: 512
+  xf_layers: 16
+  xf_heads: 8
+  xf_final_ln: true
+  xf_padding: true
+  diffusion_steps: 1000
+  noise_schedule: "squaredcos_cap_v2"
+  timestep_respacing: "100"
+  use_scale_shift_norm: false
+  resblock_updown: true
+  use_fp16: false
+  cache_text_emb: false
+  inpaint: false
+  super_res: false
+  raw_unet: true
+  use_kl: false
+  rescale_timesteps: false
+  rescale_learned_sigmas: false
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

@@ -13,6 +13,23 @@ from ddpm import EnergyMLP, CompositionEnergyMLP
 import ComposableDiff
 
 
+def to_tensor(data: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+    """convert data to torch.Tensor
+
+    Args:
+        data (Union[np.ndarray, torch.Tensor]): data
+
+    Returns:
+        torch.Tensor: torch.Tensor
+    """
+    if isinstance(data, np.ndarray):
+        return torch.from_numpy(data).to(device)
+    elif isinstance(data, torch.Tensor):
+        return data.to(device)
+    else:
+        raise ValueError("data should be np.ndarray or torch.Tensor")
+
+
 def intermediate_distribution(data_points: np.ndarray,
                               num_timesteps: int=50) -> List[np.ndarray]:
     """get the intermediate distribution of the data points
@@ -27,7 +44,7 @@ def intermediate_distribution(data_points: np.ndarray,
         the last element is the original data points.
     """
     noise_scheduler = NoiseScheduler(num_timesteps=num_timesteps)
-    origin_data = torch.tensor(data_points).float().to(device)
+    origin_data = to_tensor(data_points).float().to(device)
     intermediate_data_list = []
     for i in range(num_timesteps):
         noise = torch.randn_like(origin_data)
@@ -50,7 +67,7 @@ def calculate_energy(samples: np.ndarray,
         np.ndarray: energy values
     """
     with torch.no_grad():
-        energy_on_data = model.energy(torch.from_numpy(samples).to(device), t+torch.zeros(len(samples)).long().to(device))
+        energy_on_data = model.energy(to_tensor(samples).to(device), t+torch.zeros(len(samples)).long().to(device))
     return energy_on_data.cpu().numpy()
 
 
@@ -78,6 +95,8 @@ def calculate_threshold_multiple_timesteps(samples, model, confidence=0.999):
 def calculate_interval(samples: torch.Tensor,
                        denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                        energy_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                       confidence: float,
+                       bootstrap_method: str,
                     ) -> Tuple[float, float]:
     """calculate the interval of the samples.
 
@@ -85,7 +104,8 @@ def calculate_interval(samples: torch.Tensor,
         samples (torch.Tensor): samples (n_samples, n_features)
         denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): denoising function
         energy_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): energy function
-        confidence (float, optional): confidence level. Defaults to 0.999.
+        confidence (float): confidence level.
+        bootstrap_method (str): bootstrap method, "simple" or "normal" or "pivot"
 
     Returns:
         Tuple[float, float]: interval
@@ -93,20 +113,24 @@ def calculate_interval(samples: torch.Tensor,
     # calculate the level-set values
     with torch.no_grad():
         energy_on_data = energy_fn(denoise_fn, samples, torch.zeros(len(samples)).long().to(device))
-    extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy())
+    extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy(),
+                                                                      method=bootstrap_method,
+                                                                      confidence=confidence)
     return extreme_value_l, extreme_value_r
 
 
 def calculate_interval_multiple_timesteps(samples: np.ndarray,
                                           model: Union[EnergyMLP, CompositionEnergyMLP],
-                                          confidence: float=0.999,
+                                          confidence: float,
+                                          bootstrap_method: str,
                                           num_timesteps: int=50) -> List[Tuple[float, float]]:
     """calculate the interval of the samples.
 
     Args:
         samples (np.ndarray): samples (n_samples, n_features)
         model (Union[EnergyMLP, CompositionEnergyMLP]): energy model
-        confidence (float, optional): confidence level. Defaults to 0.999.
+        confidence (float): confidence level.
+        bootstrap_method (str): bootstrap method, "simple" or "normal" or "pivot"
         num_timesteps (int, optional): number of diffusion steps. Defaults to 50.
 
     Returns:
@@ -118,7 +142,9 @@ def calculate_interval_multiple_timesteps(samples: np.ndarray,
         # calculate the level-set values
         with torch.no_grad():
             energy_on_data = model.energy(torch.from_numpy(samples_t).to(device), t+torch.zeros(len(samples)).long().to(device))
-        extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy(), confidence=confidence)
+        extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy(),
+                                                                          method=bootstrap_method,
+                                                                          confidence=confidence)
         intervals.append((extreme_value_l, extreme_value_r))
 
     return intervals
@@ -127,7 +153,8 @@ def calculate_interval_multiple_timesteps(samples: np.ndarray,
 def calculate_interval_to_avoid_multiple_timesteps(positive_samples: np.ndarray,
                                                    negative_samples: np.ndarray,
                                                    model: Union[EnergyMLP, CompositionEnergyMLP],
-                                                   confidence: float=0.999,
+                                                   confidence: float,
+                                                   bootstrap_method: str,
                                                    num_timesteps: int=50) -> List[Tuple[float, float]]:
     """calculate the interval to avoid for the samples
 
@@ -135,7 +162,8 @@ def calculate_interval_to_avoid_multiple_timesteps(positive_samples: np.ndarray,
         positive_samples (np.ndarray): samples to reach (n_samples, n_features)
         negative_samples (np.ndarray): samples to avoid (n_samples, n_features)
         model (Union[EnergyMLP, CompositionEnergyMLP]): energy model
-        confidence (float, optional): confidence level. Defaults to 0.999.
+        confidence (float): confidence level. Defaults to 0.999.
+        bootstrap_method (str): bootstrap method, "simple" or "normal" or "pivot"
         num_timesteps (int, optional): number of diffusion steps. Defaults to 50.
 
     Returns:
@@ -147,7 +175,9 @@ def calculate_interval_to_avoid_multiple_timesteps(positive_samples: np.ndarray,
         # calculate the level-set values
         with torch.no_grad():
             energy_on_data = model.energy(torch.from_numpy(samples_t).to(device), t+torch.zeros(len(positive_samples)).long().to(device))
-        extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy(), confidence=confidence)
+        extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy(),
+                                                                          method=bootstrap_method,
+                                                                          confidence=confidence)
         intervals_positive.append((extreme_value_l, extreme_value_r))
 
     intermediate_samples = intermediate_distribution(negative_samples, num_timesteps)[1:]  # ignore the initial Gaussian distribution
@@ -156,7 +186,9 @@ def calculate_interval_to_avoid_multiple_timesteps(positive_samples: np.ndarray,
         # calculate the level-set values
         with torch.no_grad():
             energy_on_data = model.energy(torch.from_numpy(samples_t).to(device), t+torch.zeros(len(negative_samples)).long().to(device))
-        extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy(), confidence=confidence)
+        extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy(),
+                                                                          method=bootstrap_method,
+                                                                          confidence=confidence)
         intervals_negative.append((extreme_value_l, extreme_value_r))
 
     intervals_to_avoid = []
@@ -268,7 +300,9 @@ def add_noise_at_t(noise_scheduler: ComposableDiff.composable_diffusion.gaussian
     timesteps_t = timesteps_t.to(device)
     timesteps_k = timesteps_k.to(device)
     alphas = 1 - noise_scheduler.betas
-    log_alphas = torch.log(torch.from_numpy(alphas).to(device))
+
+    log_alphas = torch.log(to_tensor(alphas).to(device))
+
     # -> (T,)
     log_alphas_batched = log_alphas[None, :].repeat(B, 1)
     log_alphas_batched = log_alphas_batched.to(device)
@@ -329,11 +363,17 @@ def calculate_elbo(model: torch.nn.Module,
     B, *D = x_t.shape
 
     # sample noise (batch, n_sample, n_features)
-    noise = torch.randn(1, n_samples, *D, device=x_t.device).expand(B, n_samples, *D)
+    # following https://arxiv.org/pdf/2305.15241, use the same noise for all samples
+    noise = torch.randn(1, 1, *D, device=x_t.device).expand(B, n_samples, *D)
 
-    # sample timestep randomly from [t, T): (batch, n_sample)
     T = noise_scheduler.num_timesteps
-    ts_k = torch.randint(t, T, (1, n_samples), device=x_t.device).expand(B, n_samples)
+    if n_samples < (T - t):
+        # interleave the samples
+        ts_k = torch.linspace(t, T-1, n_samples, device=x_t.device).round().long().clamp(t, T-1)
+        ts_k = ts_k[None, :].expand(B, n_samples)
+    else:
+        # sample timestep randomly from [t, T): (batch, n_sample)
+        ts_k = torch.randint(t, T, (1, n_samples), device=x_t.device).expand(B, n_samples)
 
     reshaped_ts_k = ts_k.reshape(B*n_samples)
     reshaped_ts_t = torch.full((B*n_samples,), t, device=x_t.device)
@@ -346,8 +386,8 @@ def calculate_elbo(model: torch.nn.Module,
     # -> (batch, n_sample, n_features)
 
     # estimate the ELBO
-    cumprod_alpha_prev = torch.from_numpy(noise_scheduler.alphas_cumprod_prev).to(x_t.device).float()
-    cumprod_alpha = torch.from_numpy(noise_scheduler.alphas_cumprod).to(x_t.device).float()
+    cumprod_alpha_prev = to_tensor(noise_scheduler.alphas_cumprod_prev).to(x_t.device).float()
+    cumprod_alpha = to_tensor(noise_scheduler.alphas_cumprod).to(x_t.device).float()
 
     denoising_matching_terms = torch.zeros(B * n_samples, device=x_t.device)
 

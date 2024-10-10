@@ -186,8 +186,13 @@ def rejection_sampling_baseline_with_interval_calculation(model_to_test, model_1
     dataset_1 = diffusion_baseline(model_1, eval_batch_size=eval_batch_size)[-1]
     dataset_2 = diffusion_baseline(model_2, eval_batch_size=eval_batch_size)[-1]
     dataset_3_origin = diffusion_baseline(model_to_test, eval_batch_size=eval_batch_size)[-1]
-    interval_1 = calculate_interval(samples=dataset_1, model=model_1)
-    interval_2 = calculate_interval(samples=dataset_2, model=model_2)
+
+    dataset_1 = torch.from_numpy(dataset_1).float().to(ddpm.device)
+    dataset_2 = torch.from_numpy(dataset_2).float().to(ddpm.device)
+    dataset_3_origin = torch.from_numpy(dataset_3_origin).float().to(ddpm.device)
+
+    interval_1 = calculate_interval(samples=dataset_1, denoise_fn=model_1, energy_fn=lambda model, x, t: model.energy(x, t))
+    interval_2 = calculate_interval(samples=dataset_2, denoise_fn=model_2, energy_fn=lambda model, x, t: model.energy(x, t))
     energy_1 = calculate_energy(samples=dataset_3_origin, model=model_1)
     energy_2 = calculate_energy(samples=dataset_3_origin, model=model_2)
     need_to_remove = need_to_remove_with_thresholds(algebra=algebra,
@@ -213,9 +218,9 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(model_to_test: dd
                                                                model_1: ddpm.EnergyMLP,
                                                                model_2: ddpm.EnergyMLP,
                                                                algebra: str,
-                                                               eval_batch_size=8000,
-                                                               n_sample_for_elbo=1000,
-                                                               mini_batch=20,
+                                                               eval_batch_size=10000,
+                                                               n_sample_for_elbo=1,
+                                                               mini_batch=160000,
                                                                num_timesteps=50,
         ) -> Tuple[np.ndarray, List[float], Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]]:
     """similar to rejection_sampling_baseline_with_interval_calculation, but using elbo to estimate the -log p instead of energy

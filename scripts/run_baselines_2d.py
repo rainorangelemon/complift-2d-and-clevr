@@ -18,7 +18,7 @@ import wandb
 import numpy as np
 
 # Initialize wandb
-wandb.init(project="r_and_r")
+wandb.init(project="r_and_r", name="synthetic data 2d")
 wandb.run.log_code(".")
 
 # Load the models

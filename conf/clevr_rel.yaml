@@ -1,66 +1,10 @@
 # config.yaml
 defaults:
-  - _self_
+  - clevr_base
   - override hydra/hydra_logging: disabled
   - override hydra/job_logging: disabled
 
-method_name: ???
-ckpt_path: ComposableDiff/models/clevr_rel.pt
-data_path: ComposableDiff/dataset/test_clevr_rel_5000_3.npz
-output_dir: test_${method_name}_${support_interval_sample_number}x${n_sample_for_elbo}
-
-# for inference
-batch_size: 32
-cfg_weight: 7.5
-
-# for rejection sampling
-support_interval_sample_number: 10
-n_sample_for_elbo: 100
-mini_batch: 100
-
-# for evaluation
-max_samples_for_generation: 100
-
 model:
   dataset: clevr_rel
-  image_size: 128
-  num_channels: 192
-  num_res_blocks: 2
-  channel_mult: ""
-  num_heads: 1
-  num_head_channels: 64
-  num_heads_upsample: -1
-  attention_resolutions: "32,16,8"
-  dropout: 0.1
-  text_ctx: 128
-  xf_width: 512
-  xf_layers: 16
-  xf_heads: 8
-  xf_final_ln: true
-  xf_padding: true
-  diffusion_steps: 1000
-  noise_schedule: "squaredcos_cap_v2"
-  timestep_respacing: "100"
-  use_scale_shift_norm: false
-  resblock_updown: true
-  use_fp16: false
-  cache_text_emb: false
-  inpaint: false
-  super_res: false
-  raw_unet: true
   learn_sigma: true
-  use_kl: false
-  rescale_timesteps: false
-  rescale_learned_sigmas: false
   num_classes: "4,3,9,3,3,7"
-
-classifier:
-  checkpoint_dir: ComposableDiff/models
-  dataset: ${model.dataset}
-  im_size: ${model.image_size}
-  filter_dim: 64
-
-hydra:
-  run:
-    dir: .
-  output_subdir: null

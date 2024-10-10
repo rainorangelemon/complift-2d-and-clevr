@@ -221,7 +221,8 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
                                                                conditions_denoise_fn: List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
                                                                x_shape: Tuple[int, ...],
                                                                algebras: List[str],
-                                                               noise_scheduler: ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion=None,
+                                                               noise_scheduler: ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
+                                                               bootstrap_cfg: dict[str, Union[float, str]],
                                                                eval_batch_size=8000,
                                                                n_sample_for_elbo=1000,
                                                                mini_batch=20,
@@ -236,6 +237,7 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
         x_shape (Tuple[int, ...]): shape of each sample
         algebras (str): list of the algebra from ["product", "summation", "negation"]
         noise_scheduler (ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion, optional): noise scheduler. Defaults to None.
+        bootstrap_cfg (dict[str, Union[float, str]]): configuration for the bootstrap method, including "method" and "confidence"
         eval_batch_size (int, optional): Number of samples to
                                          (1) calculate the support interval,
                                          (2) generate the samples.
@@ -285,7 +287,9 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
     # dataset_composed_origin = diffusion_baseline(composed_denoise_fn, noise_scheduler, x_shape, eval_batch_size=eval_batch_size)[-1]
     intervals_at_t0 = [calculate_interval(samples=dataset.to(device),
                                           denoise_fn=condition_denoise_fn,
-                                          energy_fn=estimate_neg_logp)
+                                          energy_fn=estimate_neg_logp,
+                                          confidence=bootstrap_cfg["confidence"],
+                                          bootstrap_method=bootstrap_cfg["method"])
                                           for dataset, condition_denoise_fn in zip(datasets, conditions_denoise_fn)]
 
     # intervals_1 = calculate_interval_multiple_timesteps(samples=dataset_composed_origin, model=model_1)[::-1]
