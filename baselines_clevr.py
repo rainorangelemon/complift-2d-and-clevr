@@ -247,7 +247,6 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
                                                                                       ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
                                                                reject_using_interval: bool,
                                                                eval_batch_size,
-                                                               n_sample_for_elbo,
                                                                mini_batch,
                                                                bootstrap_cfg: dict[str, Union[float, str]],
                                                                rejection_scheduler_cfg: dict[str, Union[float, str]],
@@ -267,7 +266,6 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
         eval_batch_size (int, optional): Number of samples to
                                          (1) calculate the support interval,
                                          (2) generate the samples.
-        n_sample_for_elbo (int, optional): Number of (t, epsilon) pairs to estimate ELBO.
         mini_batch (int, optional): mini batch size for elbo estimation.
         bootstrap_cfg (dict[str, Union[float, str]]): configuration for the bootstrap method, including "method" and "confidence"
         rejection_scheduler_cfg (dict[str, Union[float, str]]): configuration for the rejection scheduler

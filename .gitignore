@@ -6,6 +6,7 @@ wandb
 *.gif
 *.txt
 *.tar
+runs
 __pycache__
 DiT
 __pycache__/

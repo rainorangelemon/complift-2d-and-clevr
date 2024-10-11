@@ -2,6 +2,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import numpy as np
 from typing import Union
+import os
 
 import argparse
 import torch as th
@@ -141,10 +142,9 @@ def calculate_classification_score(classifier: th.nn.Module,
 @hydra.main(config_path="../conf")
 def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
-    path_of_dataset = cfg.data_path
-    name_of_dataset = path_of_dataset.split("/")[-1].split(".")[0]
+
     wandb.init(project="rejection_sampling",
-               name=f"{name_of_dataset}_{cfg.support_interval_sample_number}x{cfg.n_sample_for_elbo}",
+               name=f"{cfg.experiment_name}",
                # to dict
                config=OmegaConf.to_container(cfg, resolve=True))
 
@@ -176,6 +176,11 @@ def main(cfg: DictConfig):
     experiment_name = cfg.data_path.split('/')[-1].split('.')[0]
     output_dir = output_dir / experiment_name
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save the config
+    config_save_path = os.path.join(cfg.output_dir, "config.yaml")
+    with open(config_save_path, "w") as f:
+        f.write(OmegaConf.to_yaml(cfg))
 
     # Create dataset and dataloader
     if "clevr_pos" in cfg.data_path:

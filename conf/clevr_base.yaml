@@ -3,26 +3,28 @@ defaults:
 
 method_name: ???  # choose among {baseline, rejection, best_of_n}
 num_constraints: ??? # choose among {1, 2, 3}
+experiment_name: ${model.dataset}_${num_constraints}_${method_name}
 ckpt_path: ComposableDiff/models/${model.dataset}.pt
 data_path: ComposableDiff/dataset/test_${model.dataset}_5000_${num_constraints}.npz
-output_dir: runs/test_${method_name}_${support_interval_sample_number}x${n_sample_for_elbo}
+output_dir: runs/${now:%m-%d-%H-%M-%S}
 
 # for inference
 batch_size: 32
 cfg_weight: 7.5
 # for evaluation
 max_samples_for_generation: 100
+mini_batch: 100
 
 # for rejection sampling
 rejection:
-  support_interval_sample_number: 10
-  mini_batch: 100
+  eval_batch_size: 10
+  mini_batch: ${mini_batch}
   reject_using_interval: false
 
 # for ELBO estimation
 elbo:
   n_samples: 100
-  same_noise: true
+  same_noise: true  # if true, sample the same epsilon for all (t, epsilon) pairs
   sample_timesteps: interleave
 
 # for rejection sampling
