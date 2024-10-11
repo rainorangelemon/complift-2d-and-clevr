@@ -303,11 +303,10 @@ def main(cfg: DictConfig):
             x_shape=(3, options["image_size"], options["image_size"]),
             algebras=["product"]*(num_relations_per_sample-1),
             bootstrap_cfg=cfg.bootstrap,
+            elbo_cfg=cfg.elbo,
             rejection_scheduler_cfg=cfg.rejection_scheduler,
             noise_scheduler=diffusion,
-            eval_batch_size=cfg.support_interval_sample_number,
-            n_sample_for_elbo=cfg.n_sample_for_elbo,
-            mini_batch=cfg.mini_batch,
+            **cfg.rejection,
         )
 
         info = {}
@@ -369,11 +368,6 @@ def main(cfg: DictConfig):
 
         samples = samples[th.randint(0, len(samples), size=(1,))]
         samples = ((samples + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu() / 255.
-
-        if img_idx == 0:
-            # Save grid of samples
-            grid = make_grid(samples, nrow=int(np.sqrt(len(samples))), padding=2)
-            save_image(grid, f'{experiment_name}.png')
 
         # Save individual images with captions
         grid = make_grid(samples, nrow=int(np.sqrt(len(samples))), padding=0)

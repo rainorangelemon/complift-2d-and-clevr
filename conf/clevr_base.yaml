@@ -10,22 +10,30 @@ output_dir: runs/test_${method_name}_${support_interval_sample_number}x${n_sampl
 # for inference
 batch_size: 32
 cfg_weight: 7.5
-
-# for rejection sampling
-support_interval_sample_number: 10
-n_sample_for_elbo: 100
-mini_batch: 100
-
 # for evaluation
 max_samples_for_generation: 100
 
-bootstrap:
-  confidence: 0.99
-  method: normal
+# for rejection sampling
+rejection:
+  support_interval_sample_number: 10
+  mini_batch: 100
+  reject_using_interval: false
 
+# for ELBO estimation
+elbo:
+  n_samples: 100
+  same_noise: true
+  sample_timesteps: interleave
+
+# for rejection sampling
 rejection_scheduler:
   method: uniform
   timesteps_to_select: 2
+
+# for support interval estimation
+bootstrap:
+  confidence: 0.99
+  method: normal
 
 classifier:
   checkpoint_dir: ComposableDiff/models

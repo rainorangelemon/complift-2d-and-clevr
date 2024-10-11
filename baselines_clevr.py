@@ -245,11 +245,13 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
                                                                algebras: List[str],
                                                                noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
                                                                                       ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
+                                                               reject_using_interval: bool,
+                                                               eval_batch_size,
+                                                               n_sample_for_elbo,
+                                                               mini_batch,
                                                                bootstrap_cfg: dict[str, Union[float, str]],
                                                                rejection_scheduler_cfg: dict[str, Union[float, str]],
-                                                               eval_batch_size=8000,
-                                                               n_sample_for_elbo=1000,
-                                                               mini_batch=20,
+                                                               elbo_cfg: dict[str, Union[bool, str]],
                                                                resample=True,
         ) -> Tuple[List[torch.Tensor], List[float], List[Tuple[torch.Tensor, torch.Tensor]], List[torch.Tensor], List[torch.Tensor], Dict[int, List[torch.Tensor]], Dict[int, List[torch.Tensor]]]:
     """similar to rejection_sampling_baseline_with_interval_calculation, but using elbo to estimate the -log p instead of energy
@@ -261,13 +263,15 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
         x_shape (Tuple[int, ...]): shape of each sample
         algebras (str): list of the algebra from ["product", "summation", "negation"]
         noise_scheduler (ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion, optional): noise scheduler. Defaults to None.
-        bootstrap_cfg (dict[str, Union[float, str]]): configuration for the bootstrap method, including "method" and "confidence"
-        rejection_scheduler_cfg (dict[str, Union[float, str]]): configuration for the rejection scheduler
+        rejection_using_interval (bool): whether to reject samples using interval or not
         eval_batch_size (int, optional): Number of samples to
                                          (1) calculate the support interval,
                                          (2) generate the samples.
         n_sample_for_elbo (int, optional): Number of (t, epsilon) pairs to estimate ELBO.
         mini_batch (int, optional): mini batch size for elbo estimation.
+        bootstrap_cfg (dict[str, Union[float, str]]): configuration for the bootstrap method, including "method" and "confidence"
+        rejection_scheduler_cfg (dict[str, Union[float, str]]): configuration for the rejection scheduler
+        elbo_cfg (dict[str, Union[bool, str]]): configuration for the elbo estimation
 
     Returns:
         Tuple[List[torch.Tensor], List[float], List[Tuple[torch.Tensor, torch.Tensor]], List[torch.Tensor], List[torch.Tensor], Dict[int, List[torch.Tensor]], Dict[int, List[torch.Tensor]]:
@@ -286,16 +290,16 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
                                         noise_scheduler,
                                         x_t=x,
                                         t=t[0],
-                                        n_samples=n_sample_for_elbo,
                                         seed=t[0],
-                                        mini_batch=mini_batch)
+                                        mini_batch=mini_batch,
+                                        **elbo_cfg)
         log_px = calculate_elbo(unconditioned_denoise_fn,
                                 noise_scheduler,
                                 x_t=x,
                                 t=t[0],
-                                n_samples=n_sample_for_elbo,
                                 seed=t[0],
-                                mini_batch=mini_batch)
+                                mini_batch=mini_batch,
+                                **elbo_cfg)
         log_pc_given_x = log_px_given_c - log_px
         return -log_pc_given_x
 
@@ -345,8 +349,10 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
             energies_composed_across_timesteps[t[0].item()] = [e.cpu().numpy() for e in energies]
             interval_mins = [interval[0] for interval in intervals_at_t]
             interval_maxs = [interval[1] for interval in intervals_at_t]
-            # out_of_interval = [((energy < interval_min) | (energy > interval_max)) for energy, interval_min, interval_max in zip(energies, interval_mins, interval_maxs)]
-            out_of_interval = [(energy > interval_max) for energy, interval_min, interval_max in zip(energies, interval_mins, interval_maxs)]
+            if reject_using_interval:
+                out_of_interval = [((energy < interval_min) | (energy > interval_max)) for energy, interval_min, interval_max in zip(energies, interval_mins, interval_maxs)]
+            else:
+                out_of_interval = [(energy > interval_max) for energy, interval_min, interval_max in zip(energies, interval_mins, interval_maxs)]
             need_to_remove = torch.any(torch.stack(out_of_interval), dim=0)
             filter_ratios.append(need_to_remove.sum().item() / (len(x) + 1e-8))
             # resampling

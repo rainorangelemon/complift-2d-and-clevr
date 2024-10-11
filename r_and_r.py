@@ -339,7 +339,9 @@ def calculate_elbo(model: torch.nn.Module,
                    t: int,
                    n_samples: int,
                    seed: int,
-                   mini_batch: int) -> torch.Tensor:
+                   mini_batch: int,
+                   same_noise: bool,
+                   sample_timesteps: str) -> torch.Tensor:
     """calculate the approximate ELBO
 
     Args:
@@ -352,6 +354,8 @@ def calculate_elbo(model: torch.nn.Module,
         cumprod_alpha (torch.Tensor): cumulative product of alpha (T,)
         seed (int): random seed
         mini_batch (int): mini batch size
+        same_noise (bool): whether to use the same noise for all samples
+        sample_timesteps (str): how to sample the timesteps, "random" or "interleave"
 
     Returns:
         torch.Tensor: approximate ELBO (batch,)
@@ -364,18 +368,23 @@ def calculate_elbo(model: torch.nn.Module,
 
     B, *D = x_t.shape
 
-    # sample noise (batch, n_sample, n_features)
-    # following https://arxiv.org/pdf/2305.15241, use the same noise for all samples
-    noise = torch.randn(1, 1, *D, device=x_t.device).expand(B, n_samples, *D)
+    if same_noise:
+        # sample noise (batch, n_sample, n_features)
+        # following https://arxiv.org/pdf/2305.15241, use the same noise for all samples
+        noise = torch.randn(1, 1, *D, device=x_t.device).expand(B, n_samples, *D)
+    else:
+        noise = torch.randn(1, n_samples, *D, device=x_t.device).expand(B, n_samples, *D)
 
     T = noise_scheduler.num_timesteps
-    if n_samples < (T - t):
+    if sample_timesteps == "interleave":
         # interleave the samples
         ts_k = torch.linspace(t, T-1, n_samples, device=x_t.device).round().long().clamp(t, T-1)
         ts_k = ts_k[None, :].expand(B, n_samples)
-    else:
+    elif sample_timesteps == "random":
         # sample timestep randomly from [t, T): (batch, n_sample)
         ts_k = torch.randint(t, T, (1, n_samples), device=x_t.device).expand(B, n_samples)
+    else:
+        raise ValueError("sample_timesteps should be 'random' or 'interleave'")
 
     reshaped_ts_k = ts_k.reshape(B*n_samples)
     reshaped_ts_t = torch.full((B*n_samples,), t, device=x_t.device)
