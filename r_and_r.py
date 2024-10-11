@@ -95,6 +95,7 @@ def calculate_threshold_multiple_timesteps(samples, model, confidence=0.999):
 def calculate_interval(samples: torch.Tensor,
                        denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                        energy_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                       t: int,
                        confidence: float,
                        bootstrap_method: str,
                     ) -> Tuple[float, float]:
@@ -104,6 +105,7 @@ def calculate_interval(samples: torch.Tensor,
         samples (torch.Tensor): samples (n_samples, n_features)
         denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): denoising function
         energy_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): energy function
+        t (int): timestep for the current samples
         confidence (float): confidence level.
         bootstrap_method (str): bootstrap method, "simple" or "normal" or "pivot"
 
@@ -112,11 +114,11 @@ def calculate_interval(samples: torch.Tensor,
     """
     # calculate the level-set values
     with torch.no_grad():
-        energy_on_data = energy_fn(denoise_fn, samples, torch.zeros(len(samples)).long().to(device))
+        energy_on_data = energy_fn(denoise_fn, samples, torch.full((len(samples),), t).long().to(device))
     extreme_value_l, extreme_value_r = bootstrapping_and_get_interval(energy_on_data.cpu().numpy(),
                                                                       method=bootstrap_method,
                                                                       confidence=confidence)
-    return extreme_value_l, extreme_value_r
+    return [extreme_value_l, extreme_value_r], energy_on_data.cpu().numpy()
 
 
 def calculate_interval_multiple_timesteps(samples: np.ndarray,

@@ -56,6 +56,23 @@ def plot_two_intervals(interval_1: List[Tuple[float, float]], interval_2: List[T
     return img
 
 
+def plot_energy_histogram(energies: np.ndarray) -> np.ndarray:
+    # plot the histograms of the energy
+    plt.clf()
+    plt.close("all")
+    # Create a figure and a set of subplots
+    fig, _ = plt.subplots()
+
+    # Plot histogram for support_energy
+    plt.hist(energies, bins=50, color='blue', alpha=0.7)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    img = Image.open(buf)
+    return img
+
+
 def plot_acceptance_ratios(rejection_ratios: np.ndarray) -> np.ndarray:
     timesteps = list(range(len(rejection_ratios)-1, -1, -1))
     fig, ax = plt.subplots()

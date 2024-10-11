@@ -23,6 +23,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision.utils import make_grid, save_image
 from tqdm.auto import tqdm
 import wandb
+from utils import plot_energy_histogram
 
 
 class CLEVRPosDataset(Dataset):
@@ -142,7 +143,7 @@ def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
     path_of_dataset = cfg.data_path
     name_of_dataset = path_of_dataset.split("/")[-1].split(".")[0]
-    wandb.init(project="r_and_r",
+    wandb.init(project="rejection_sampling",
                name=f"{name_of_dataset}_{cfg.support_interval_sample_number}x{cfg.n_sample_for_elbo}",
                # to dict
                config=OmegaConf.to_container(cfg, resolve=True))
@@ -294,7 +295,7 @@ def main(cfg: DictConfig):
                 eval_batch_size=1,
             )
 
-        samples, filter_ratios, intervals, samples_per_condition, unfiltered_samples = \
+        samples, filter_ratios, intervals, samples_per_condition, unfiltered_samples, energies_per_condition, energies_composed = \
         method(
             composed_denoise_fn=composed_model_fn,
             unconditioned_denoise_fn=conditions_denoise_fn[-1],
@@ -302,17 +303,30 @@ def main(cfg: DictConfig):
             x_shape=(3, options["image_size"], options["image_size"]),
             algebras=["product"]*(num_relations_per_sample-1),
             bootstrap_cfg=cfg.bootstrap,
+            rejection_scheduler_cfg=cfg.rejection_scheduler,
             noise_scheduler=diffusion,
             eval_batch_size=cfg.support_interval_sample_number,
             n_sample_for_elbo=cfg.n_sample_for_elbo,
             mini_batch=cfg.mini_batch,
         )
 
+        info = {}
+        # # plot the energy histograms
+        # for t, energies_per_condition_at_t in energies_per_condition.items():
+        #     for energy_per_condition, condition_idx in zip(energies_per_condition_at_t, range(len(energies_per_condition_at_t))):
+        #         img = plot_energy_histogram(energy_per_condition.flatten())
+        #         info.update({f"energy_{t:03d}/condition_{condition_idx}_at_individual": [wandb.Image(img, caption=f"Energy histogram for condition {condition_idx} at t={t}")]})
+
+        # for t, energy_composed_at_t in energies_composed.items():
+        #     for energy_composed, condition_idx in zip(energy_composed_at_t, range(len(energy_composed_at_t))):
+        #         img = plot_energy_histogram(energy_composed.flatten())
+        #         info.update({f"energy_{t:03d}/condition_{condition_idx}_at_composed": [wandb.Image(img, caption=f"Energy histogram for composed model for condition {condition_idx} at t={t}")]})
+
         for condition_idx, dataset_per_condition, label in zip(range(len(samples_per_condition)), samples_per_condition, labels[0, :-1]):
             corrects = calculate_classification_score(classifier, dataset_per_condition, label[None, ...], device)
             print(f"Corrects for condition {condition_idx}: {corrects}/{len(dataset_per_condition)}")
-            wandb.log({f"acc/condition_{condition_idx}": corrects / len(dataset_per_condition),
-                        "global_step": global_step})
+            info.update({f"acc/condition_{condition_idx}": corrects / len(dataset_per_condition),
+                         "global_step": global_step})
 
         final_unfiltered_sample = unfiltered_samples[-1]
         if len(final_unfiltered_sample) == 0:
@@ -331,10 +345,10 @@ def main(cfg: DictConfig):
 
         print(f"Filter ratios: {filter_ratios}")
 
-        info = {"acc/final_unfiltered": corrects_unfiltered / len(final_unfiltered_sample),
-                "acc/final_filtered": corrects / len(final_sample),
-                "filter_ratios/final": filter_ratios[-1],
-                "global_step": global_step}
+        info.update({"acc/final_unfiltered": corrects_unfiltered / len(final_unfiltered_sample),
+                     "acc/final_filtered": corrects / len(final_sample),
+                     "filter_ratios/final": filter_ratios[-1],
+                     "global_step": global_step})
 
         return final_sample, info
 

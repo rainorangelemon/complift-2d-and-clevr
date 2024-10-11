@@ -191,8 +191,8 @@ def rejection_sampling_baseline_with_interval_calculation(model_to_test, model_1
     dataset_2 = torch.from_numpy(dataset_2).float().to(ddpm.device)
     dataset_3_origin = torch.from_numpy(dataset_3_origin).float().to(ddpm.device)
 
-    interval_1 = calculate_interval(samples=dataset_1, denoise_fn=model_1, energy_fn=lambda model, x, t: model.energy(x, t))
-    interval_2 = calculate_interval(samples=dataset_2, denoise_fn=model_2, energy_fn=lambda model, x, t: model.energy(x, t))
+    interval_1, _ = calculate_interval(samples=dataset_1, denoise_fn=model_1, energy_fn=lambda model, x, t: model.energy(x, t))
+    interval_2, _ = calculate_interval(samples=dataset_2, denoise_fn=model_2, energy_fn=lambda model, x, t: model.energy(x, t))
     energy_1 = calculate_energy(samples=dataset_3_origin, model=model_1)
     energy_2 = calculate_energy(samples=dataset_3_origin, model=model_2)
     need_to_remove = need_to_remove_with_thresholds(algebra=algebra,
