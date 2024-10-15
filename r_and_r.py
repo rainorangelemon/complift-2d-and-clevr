@@ -11,6 +11,7 @@ bootstrapping_and_get_interval
 from ddpm import device, NoiseScheduler
 from ddpm import EnergyMLP, CompositionEnergyMLP
 import ComposableDiff
+from tqdm.auto import tqdm
 
 
 def to_tensor(data: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
@@ -341,7 +342,8 @@ def calculate_elbo(model: torch.nn.Module,
                    seed: int,
                    mini_batch: int,
                    same_noise: bool,
-                   sample_timesteps: str) -> torch.Tensor:
+                   sample_timesteps: str,
+                   progress: bool=False) -> torch.Tensor:
     """calculate the approximate ELBO
 
     Args:
@@ -356,6 +358,7 @@ def calculate_elbo(model: torch.nn.Module,
         mini_batch (int): mini batch size
         same_noise (bool): whether to use the same noise for all samples
         sample_timesteps (str): how to sample the timesteps, "random" or "interleave"
+        progress (bool, optional): whether to show the progress bar. Defaults to False.
 
     Returns:
         torch.Tensor: approximate ELBO (batch,)
@@ -386,33 +389,34 @@ def calculate_elbo(model: torch.nn.Module,
     else:
         raise ValueError("sample_timesteps should be 'random' or 'interleave'")
 
-    reshaped_ts_k = ts_k.reshape(B*n_samples)
-    reshaped_ts_t = torch.full((B*n_samples,), t, device=x_t.device)
-
-    # sample x_k from p(x_k | x_t, t, k) (batch, n_sample, n_features)
-    reshaped_x_t = x_t[:, None, :].expand(B, n_samples, *D).reshape(B*n_samples, *D)
-    reshaped_noise = noise.reshape(B*n_samples, *D)
-    x_k = add_noise_at_t(noise_scheduler, reshaped_x_t, reshaped_noise, reshaped_ts_t, reshaped_ts_k)
-    x_k = x_k.reshape(B, n_samples, *D)
-    # -> (batch, n_sample, n_features)
-
     # estimate the ELBO
     cumprod_alpha_prev = to_tensor(noise_scheduler.alphas_cumprod_prev).to(x_t.device).float()
     cumprod_alpha = to_tensor(noise_scheduler.alphas_cumprod).to(x_t.device).float()
 
     denoising_matching_terms = torch.zeros(B * n_samples, device=x_t.device)
 
-    vectorized_x_k = x_k.flatten(0, 1)
+    # vectorized_x_k = x_k.flatten(0, 1)
     vectorized_ts_k = ts_k.flatten()
     vectorized_noise = noise.flatten(0, 1)
     vectorized_ts_t = torch.full((B * n_samples,), t, device=x_t.device)
+    vectorized_x_k_idx = torch.arange(B, device=x_t.device)[:, None].expand(B, n_samples).flatten()
 
-    for i in range(0, B * n_samples, mini_batch):
+    if progress:
+        iterator = tqdm(range(0, B * n_samples, mini_batch))
+    else:
+        iterator = range(0, B * n_samples, mini_batch)
+
+    for i in iterator:
         # Prepare mini-batch
-        batch_x_k = vectorized_x_k[i:i + mini_batch]
         batch_ts_k = vectorized_ts_k[i:i + mini_batch]
         batch_noise = vectorized_noise[i:i + mini_batch]
         batch_ts_t = vectorized_ts_t[i:i + mini_batch]
+        batch_x_t = x_t[vectorized_x_k_idx[i:i + mini_batch]]
+        batch_x_k = add_noise_at_t(noise_scheduler,
+                                   batch_x_t,
+                                   batch_noise,
+                                   batch_ts_t,
+                                   batch_ts_k)
 
         # Model prediction
         batch_noise_pred = model(batch_x_k, batch_ts_k)

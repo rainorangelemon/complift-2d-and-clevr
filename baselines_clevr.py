@@ -238,6 +238,68 @@ def create_rejection_timesteps(method: str,
         return list(range(0, timesteps_to_select))
 
 
+def make_estimate_neg_logp(elbo_cfg: dict[str, Union[bool, str]],
+                            noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
+                                                    ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
+                            unconditioned_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                            mini_batch: int,
+                            progress: bool=False) -> Callable[[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], torch.Tensor, torch.Tensor], torch.Tensor]:
+    """Creates a function to estimate the negative log probability using ELBO.
+
+    Args:
+        elbo_cfg (dict[str, Union[bool, str]]): Configuration for ELBO estimation, including whether to use CFG, number of samples, and other parameters.
+        noise_scheduler (Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion, ComposableDiff.composable_diffusion.respace.SpacedDiffusion]): Noise scheduler for the diffusion process.
+        unconditioned_denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): Denoising function for the unconditioned model.
+        mini_batch (int): Mini batch size for ELBO estimation.
+        progress (bool, optional): Whether to show the progress bar. Defaults to False.
+
+    Returns:
+        Callable[[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], torch.Tensor, torch.Tensor], torch.Tensor]: Function to estimate the negative log probability.
+    """
+    def estimate_neg_logp(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                            x: torch.Tensor,
+                            t: torch.Tensor) -> torch.Tensor:
+        if x.shape[0] == 0:
+            return torch.zeros((0,), dtype=x.dtype, device=x.device)
+        assert len(t.unique()) == 1, "t should be the same for all samples, but got {}".format(t.unique())
+        if elbo_cfg["use_cfg"]:
+            log_px_given_c = calculate_elbo(denoise_fn,
+                                            noise_scheduler,
+                                            x_t=x,
+                                            t=t[0],
+                                            seed=t[0],
+                                            mini_batch=mini_batch,
+                                            n_samples=elbo_cfg["n_samples"],
+                                            same_noise=elbo_cfg["same_noise"],
+                                            sample_timesteps=elbo_cfg["sample_timesteps"],
+                                            progress=progress)
+            log_px = calculate_elbo(unconditioned_denoise_fn,
+                                    noise_scheduler,
+                                    x_t=x,
+                                    t=t[0],
+                                    seed=t[0],
+                                    mini_batch=mini_batch,
+                                    n_samples=elbo_cfg["n_samples"],
+                                    same_noise=elbo_cfg["same_noise"],
+                                    sample_timesteps=elbo_cfg["sample_timesteps"],
+                                    progress=progress)
+            log_pc_given_x = log_px_given_c - log_px
+            return -log_pc_given_x
+        else:
+            log_px_given_c = calculate_elbo(denoise_fn,
+                                            noise_scheduler,
+                                            x_t=x,
+                                            t=t[0],
+                                            seed=t[0],
+                                            mini_batch=mini_batch,
+                                            n_samples=elbo_cfg["n_samples"],
+                                            same_noise=elbo_cfg["same_noise"],
+                                            sample_timesteps=elbo_cfg["sample_timesteps"],
+                                            progress=progress)
+            return -log_px_given_c
+    return estimate_neg_logp
+
+
 def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                                                                unconditioned_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                                                                conditions_denoise_fn: List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
@@ -278,29 +340,6 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
     assert all([algebra == "product" for algebra in algebras]), "only support product algebra for now, but got {}".format(algebras)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    def estimate_neg_logp(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-                          x: torch.Tensor,
-                          t: torch.Tensor):
-        if x.shape[0] == 0:
-            return torch.zeros((0,), dtype=x.dtype, device=x.device)
-        assert len(t.unique())==1, "t should be the same for all samples, but got {}".format(t.unique())
-        log_px_given_c = calculate_elbo(denoise_fn,
-                                        noise_scheduler,
-                                        x_t=x,
-                                        t=t[0],
-                                        seed=t[0],
-                                        mini_batch=mini_batch,
-                                        **elbo_cfg)
-        log_px = calculate_elbo(unconditioned_denoise_fn,
-                                noise_scheduler,
-                                x_t=x,
-                                t=t[0],
-                                seed=t[0],
-                                mini_batch=mini_batch,
-                                **elbo_cfg)
-        log_pc_given_x = log_px_given_c - log_px
-        return -log_pc_given_x
-
     datasets_across_timesteps = [diffusion_baseline(lambda x, t: condition_denoise_fn(x, t, use_cfg=True),
                                                     noise_scheduler, x_shape,
                                                     eval_batch_size=eval_batch_size)
@@ -311,6 +350,8 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
         rejection_timesteps_unspaced = [noise_scheduler.timestep_map[t] for t in rejection_timesteps]
     else:
         rejection_timesteps_unspaced = rejection_timesteps
+
+    estimate_neg_logp = make_estimate_neg_logp(elbo_cfg, noise_scheduler, unconditioned_denoise_fn, mini_batch)
 
     # dataset_composed_origin = diffusion_baseline(composed_denoise_fn, noise_scheduler, x_shape, eval_batch_size=eval_batch_size)[-1]
     intervals_across_timesteps = {}

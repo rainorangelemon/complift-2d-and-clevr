@@ -66,6 +66,23 @@ def plot_energy_histogram(energies: np.ndarray) -> np.ndarray:
     # Plot histogram for support_energy
     plt.hist(energies, bins=50, color='blue', alpha=0.7)
 
+    if len(energies) > 0:
+        # plot the percentile using red dashed line
+        percentile_95 = np.percentile(energies, 95)
+        percentile_05 = np.percentile(energies, 5)
+        # label in scientific notation
+        plt.axvline(x=percentile_95, color='red', linestyle='--', label=f'95th percentile: {percentile_95:.2e}')
+        plt.axvline(x=percentile_05, color='red', linestyle='--', label=f'5th percentile: {percentile_05:.2e}')
+
+    plt.legend()
+
+    # in case the x-axis overlaps
+    plt.xticks(rotation=45)
+    # set the xticks to scientific notation
+    plt.ticklabel_format(axis='x', style='sci', scilimits=(0, 0))
+
+    plt.tight_layout()
+
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
     buf.seek(0)

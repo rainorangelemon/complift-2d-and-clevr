@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# Create a directory to store the downloaded files
-mkdir -p clevr_datasets
-
 # Function to download a file
 download_file() {
 	local url=$1
