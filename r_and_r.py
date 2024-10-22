@@ -429,7 +429,7 @@ def calculate_elbo(model: torch.nn.Module,
             cumprod_alpha_k=cumprod_alpha[batch_ts_k]
         )
         # -> (batch * min(mini_batch, n_samples - i), n_features)
-        batch_term = batch_term.pow(2).view(batch_term.shape[0], -1).mean(dim=1)
+        batch_term = batch_term.pow(2).reshape(batch_term.shape[0], -1).mean(dim=1)
         # -> (batch * min(mini_batch, n_samples - i),)
         denoising_matching_terms[i:i + mini_batch] = batch_term
         # -> (batch, min(mini_batch, n_samples - i))

@@ -331,15 +331,15 @@ def main(cfg: DictConfig):
                                                                    progress=True)
 
         # read samples from the output directory
-        samples, condition_samples = read_samples("runs/10-12_16-47-08/test_clevr_rel_5000_2", global_step,
+        samples, condition_samples = read_samples("runs/10-15_10-10-41/test_clevr_rel_5000_2", global_step,
                                                   num_samples=100, num_conditions=num_relations_per_sample-1)
         samples = samples.to(device)
         condition_samples = [sample.to(device) for sample in condition_samples]
 
         # check whether exists the samples
-        if os.path.exists(f"runs/10-13_13-00-11/test_clevr_rel_5000_2/energies_{global_step:05d}.pt"):
-            energies = th.load(f"runs/10-13_13-00-11/test_clevr_rel_5000_2/energies_{global_step:05d}.pt")
-            energies_per_condition = th.load(f"runs/10-13_13-00-11/test_clevr_rel_5000_2/energies_per_condition_{global_step:05d}.pt")
+        if os.path.exists(f"runs/10-15_12-11-25/test_clevr_rel_5000_2/energies_{global_step:05d}.pt"):
+            energies = th.load(f"runs/10-15_12-11-25/test_clevr_rel_5000_2/energies_{global_step:05d}.pt")
+            energies_per_condition = th.load(f"runs/10-15_12-11-25/test_clevr_rel_5000_2/energies_per_condition_{global_step:05d}.pt")
         else:
             # calculate the energies
             with catchtime('calculate energy'):
@@ -351,30 +351,33 @@ def main(cfg: DictConfig):
                                                             t=th.full((len(condition_samples[i]),), 0, dtype=th.long, device=condition_samples[i].device))
                                                             for i, denoise_fn in enumerate(conditions_denoise_fn[:-1])]
 
-            # save the energies to pt files
-            th.save(energies, output_dir / f"energies_{global_step:05d}.pt")
-            th.save(energies_per_condition, output_dir / f"energies_per_condition_{global_step:05d}.pt")
+                # save the energies to pt files
+                th.save(energies, output_dir / f"energies_{global_step:05d}.pt")
+                th.save(energies_per_condition, output_dir / f"energies_per_condition_{global_step:05d}.pt")
 
         info = {}
 
-        hot_condition_samples = []
-        for condition_idx, condition_denoise_fn in enumerate(conditions_denoise_fn[:-1]):
-            condition_samples_all_t = baselines_clevr.diffusion_baseline(
-                denoise_fn=lambda x, t: condition_denoise_fn(x, t, use_cfg=True),
-                diffusion=diffusion,
-                x_shape=(3, options["image_size"], options["image_size"]),
-                eval_batch_size=100,
-            )
-            hot_condition_samples.append(condition_samples_all_t[-1])  # Keep only the final samples
+        # hot_condition_samples = []
+        # for condition_idx, condition_denoise_fn in enumerate(conditions_denoise_fn[:-1]):
+        #     condition_samples_all_t = baselines_clevr.diffusion_baseline(
+        #         denoise_fn=lambda x, t: condition_denoise_fn(x, t, use_cfg=True),
+        #         diffusion=diffusion,
+        #         x_shape=(3, options["image_size"], options["image_size"]),
+        #         eval_batch_size=100,
+        #     )
+        #     hot_condition_samples.append(condition_samples_all_t[-1])  # Keep only the final samples
 
-            # test the classifier on the condition samples
-            correct_per_sample, corrects = calculate_classification_score(classifier, hot_condition_samples[-1], labels[None, 0, condition_idx], device)
-            print(f"Corrects for condition {condition_idx} on hot samples: {corrects}/{len(condition_samples[-1])}")
+        #     # test the classifier on the condition samples
+        #     correct_per_sample, corrects = calculate_classification_score(classifier, hot_condition_samples[-1], labels[None, 0, condition_idx], device)
+        #     print(f"Corrects for condition {condition_idx} on hot samples: {corrects}/{len(condition_samples[-1])}")
 
+        use_filtering = True
         for condition_idx, condition_sample, label in zip(range(len(condition_samples)), condition_samples, labels[0, :-1]):
             # calculate the energy for the condition samples
             correct_per_sample, corrects = calculate_classification_score(classifier, condition_sample, label[None, ...], device)
             print(f"Corrects for condition {condition_idx} on individual samples: {corrects}/{len(condition_sample)}")
+            if corrects < 0.5 * len(condition_sample):
+                use_filtering = False
 
         # plot the energy histograms
         for condition_idx, composed_energies_per_condition, individual_energies_per_condition, label in \
@@ -403,7 +406,7 @@ def main(cfg: DictConfig):
         print(f"Corrects unfiltered: {corrects_unfiltered}/{len(samples)}")
 
         # filter the samples
-        thresholds_per_condition = [th.quantile(energies_per_condition[i].flatten(), 0.1) for i in range(len(energies_per_condition))]
+        thresholds_per_condition = [th.quantile(energies_per_condition[i].flatten(), 0.95) for i in range(len(energies_per_condition))]
         # thresholds_per_condition = [th.quantile(energies[i].flatten(), 0.8) for i in range(len(energies))]
         out_of_threshold = [composed_energies_per_condition > threshold for composed_energies_per_condition, threshold in zip(energies, thresholds_per_condition)]
         out_of_threshold = th.stack(out_of_threshold, dim=1).any(dim=1)
@@ -413,12 +416,12 @@ def main(cfg: DictConfig):
         # filtered_samples_idx = th.argmin(th.stack(energies).sum(dim=0))
         # filtered_samples = samples[filtered_samples_idx].unsqueeze(0)
 
-        if len(filtered_samples) != 0:
+        if (len(filtered_samples) != 0) and use_filtering:
             # Calculate the classification score for the filtered samples
             _, corrects_filtered = calculate_classification_score(classifier, filtered_samples, labels[0, :-1], device)
             print(f"Corrects filtered: {corrects_filtered}/{len(filtered_samples)}")
         else:
-            corrects_filtered = 0
+            corrects_filtered = corrects_unfiltered
             filtered_samples = samples
 
         info.update({"acc/final_unfiltered": corrects_unfiltered / len(samples),

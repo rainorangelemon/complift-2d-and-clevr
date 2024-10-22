@@ -108,7 +108,7 @@ def main():
     defaults = model_and_diffusion_defaults()
     add_dict_to_argparser(parser, defaults)
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--output_dir', type=str, default='output')
+    parser.add_argument('--output_dir', type=str, default='ComposableDiff/output')
     parser.add_argument('--weights', type=float, nargs="+", default=[7.5])
     parser.add_argument('--data_path', type=str, default='./dataset/test_clevr_rel_5000_3.npz')
 
@@ -148,9 +148,9 @@ def main():
     model.to(device)
 
     if "clevr_rel" in args.data_path:
-        args.ckpt_path = "models/clevr_rel.pt"
+        args.ckpt_path = "ComposableDiff/models/clevr_rel.pt"
     elif "clevr_pos" in args.data_path:
-        args.ckpt_path = "models/clevr_pos.pt"
+        args.ckpt_path = "ComposableDiff/models/clevr_pos.pt"
 
     print(f'Loading checkpoint from {args.ckpt_path}')
     checkpoint = th.load(args.ckpt_path, map_location='cpu')

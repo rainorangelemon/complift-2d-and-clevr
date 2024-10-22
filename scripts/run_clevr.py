@@ -291,7 +291,7 @@ def main(cfg: DictConfig):
         if cfg.method_name == "rejection":
             method = baselines_clevr.rejection_sampling_baseline_with_interval_calculation_elbo
         elif cfg.method_name == "best_of_n":
-            method = baselines_clevr.best_of_n_sampling_baseline_with_interval_calculation_elbo
+            method = baselines_clevr.best_of_n_sampling
         elif cfg.method_name == "baseline":
             method = lambda **kwargs: baselines_clevr.diffusion_baseline(
                 denoise_fn=kwargs["composed_denoise_fn"],

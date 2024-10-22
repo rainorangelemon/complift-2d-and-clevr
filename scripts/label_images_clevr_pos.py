@@ -52,64 +52,6 @@ class CLEVRPosDataset(Dataset):
         return ' and '.join(paragraphs)
 
 
-class CLEVRRelDataset(Dataset):
-    def __init__(
-        self,
-        data_path,
-    ):
-        self.data_path = data_path
-
-        data = np.load(self.data_path)
-        self.labels = data['labels']
-
-        self.description = {
-            "left": ["to the left of"],
-            "right": ["to the right of"],
-            "behind": ["behind"],
-            "front": ["in front of"],
-            "above": ["above"],
-            "below": ["below"]
-        }
-
-        self.shapes_to_idx = {"cube": 0, "sphere": 1, "cylinder": 2, 'none': 3}
-        self.colors_to_idx = {"gray": 0, "red": 1, "blue": 2, "green": 3, "brown": 4, "purple": 5, "cyan": 6,
-                              "yellow": 7, 'none': 8}
-        self.materials_to_idx = {"rubber": 0, "metal": 1, 'none': 2}
-        self.sizes_to_idx = {"small": 0, "large": 1, 'none': 2}
-        self.relations_to_idx = {"left": 0, "right": 1, "front": 2, "behind": 3, 'below': 4, 'above': 5, 'none': 6}
-
-        self.idx_to_colors = list(self.colors_to_idx.keys())
-        self.idx_to_shapes = list(self.shapes_to_idx.keys())
-        self.idx_to_materials = list(self.materials_to_idx.keys())
-        self.idx_to_sizes = list(self.sizes_to_idx.keys())
-        self.idx_to_relations = list(self.relations_to_idx.keys())
-
-    def __len__(self):
-        return self.labels.shape[0]
-
-    def __getitem__(self, index):
-        label = self.labels[index]
-        return label, self.convert_caption(label)
-
-    def convert_caption(self, label):
-        paragraphs = []
-        for j in range(label.shape[0]):
-            text_label = []
-            for k in range(2):
-                shape, size, color, material, pos = label[j, k * 5:k * 5 + 5]
-                obj = ' '.join([self.idx_to_sizes[size], self.idx_to_colors[color],
-                                self.idx_to_materials[material], self.idx_to_shapes[shape]])
-                text_label.append(obj.strip())
-
-            relation = self.idx_to_relations[label[j, -1]]
-            # single object
-            if relation == 'none':
-                paragraphs.append(text_label[0])
-            else:
-                paragraphs.append(f'{text_label[0]} {self.description[relation][0]} {text_label[1]}')
-        return ' and '.join(paragraphs)
-
-
 @th.no_grad()
 def calculate_classification_score(classifier: th.nn.Module,
                                    samples: th.Tensor,
@@ -288,34 +230,19 @@ def main(cfg: DictConfig):
 
         conditions_denoise_fn = conditions_denoise_fn_factory(labels)
 
-        method = lambda **kwargs: baselines_clevr.diffusion_baseline(
-            denoise_fn=kwargs["composed_denoise_fn"],
-            diffusion=kwargs["noise_scheduler"],
-            x_shape=kwargs["x_shape"],
-            eval_batch_size=100,
-        )
-
-        for condition_idx, condition_denoise_fn in enumerate(conditions_denoise_fn[:-1]):
-            condition_samples = method(
-                composed_denoise_fn=lambda x, t: condition_denoise_fn(x, t, use_cfg=True),
-                unconditioned_denoise_fn=condition_denoise_fn,
-                x_shape=(3, options["image_size"], options["image_size"]),
-                algebras=["product"],
-                bootstrap_cfg=cfg.bootstrap,
-                elbo_cfg=cfg.elbo,
-                rejection_scheduler_cfg=cfg.rejection_scheduler,
-                noise_scheduler=diffusion,
-                **cfg.rejection,
+        if cfg.method_name == "rejection":
+            method = baselines_clevr.rejection_sampling_baseline_with_interval_calculation_elbo
+        elif cfg.method_name == "best_of_n":
+            method = baselines_clevr.best_of_n_sampling
+        elif cfg.method_name == "baseline":
+            method = lambda **kwargs: baselines_clevr.diffusion_baseline(
+                denoise_fn=kwargs["composed_denoise_fn"],
+                diffusion=kwargs["noise_scheduler"],
+                x_shape=kwargs["x_shape"],
+                eval_batch_size=1,
             )
 
-            final_condition_sample = condition_samples[-1]
-            # save sample to png in output_dir
-            final_condition_sample = ((final_condition_sample + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu() / 255.
-            for i, sample in enumerate(final_condition_sample):
-                grid = make_grid(sample, nrow=1, padding=0)
-                save_image(grid, output_dir / f'condition_sample_{global_step:05d}_condition_{condition_idx:02d}step_{i:02d}.png')
-
-        composed_samples = \
+        samples, filter_ratios, intervals, samples_per_condition, unfiltered_samples, energies_per_condition, energies_composed = \
         method(
             composed_denoise_fn=composed_model_fn,
             unconditioned_denoise_fn=conditions_denoise_fn[-1],
@@ -329,28 +256,76 @@ def main(cfg: DictConfig):
             **cfg.rejection,
         )
 
-        final_composed_sample = composed_samples[-1]
-        # save sample to png in output_dir
-        final_composed_sample = ((final_composed_sample + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu() / 255.
-        for i, sample in enumerate(final_composed_sample):
-            grid = make_grid(sample, nrow=1, padding=0)
-            save_image(grid, output_dir / f'composed_sample_{global_step:05d}_step_{i:02d}.png')
+        info = {}
+        # # plot the energy histograms
+        # for t, energies_per_condition_at_t in energies_per_condition.items():
+        #     for energy_per_condition, condition_idx in zip(energies_per_condition_at_t, range(len(energies_per_condition_at_t))):
+        #         img = plot_energy_histogram(energy_per_condition.flatten())
+        #         info.update({f"energy_{t:03d}/condition_{condition_idx}_at_individual": [wandb.Image(img, caption=f"Energy histogram for condition {condition_idx} at t={t}")]})
 
-        return final_composed_sample
+        # for t, energy_composed_at_t in energies_composed.items():
+        #     for energy_composed, condition_idx in zip(energy_composed_at_t, range(len(energy_composed_at_t))):
+        #         img = plot_energy_histogram(energy_composed.flatten())
+        #         info.update({f"energy_{t:03d}/condition_{condition_idx}_at_composed": [wandb.Image(img, caption=f"Energy histogram for composed model for condition {condition_idx} at t={t}")]})
+
+        for condition_idx, dataset_per_condition, label in zip(range(len(samples_per_condition)), samples_per_condition, labels[0, :-1]):
+            corrects = calculate_classification_score(classifier, dataset_per_condition, label[None, ...], device)
+            print(f"Corrects for condition {condition_idx}: {corrects}/{len(dataset_per_condition)}")
+            info.update({f"acc/condition_{condition_idx}": corrects / len(dataset_per_condition),
+                         "global_step": global_step})
+
+        final_unfiltered_sample = unfiltered_samples[-1]
+        if len(final_unfiltered_sample) == 0:
+            final_unfiltered_sample = th.zeros((1, 3, options["image_size"], options["image_size"]), device=device)
+
+        final_sample = samples[-1]
+        if len(final_sample) == 0:
+            final_sample = th.zeros((1, 3, options["image_size"], options["image_size"]), device=device)
+
+        # Calculate the classification score
+        corrects_unfiltered = calculate_classification_score(classifier, final_unfiltered_sample, labels[0, :-1], device)
+        print(f"Corrects unfiltered: {corrects_unfiltered}/{len(final_unfiltered_sample)}")
+
+        corrects = calculate_classification_score(classifier, final_sample, labels[0, :-1], device)
+        print(f"Corrects: {corrects}/{len(final_sample)}")
+
+        print(f"Filter ratios: {filter_ratios}")
+
+        info.update({"acc/final_unfiltered": corrects_unfiltered / len(final_unfiltered_sample),
+                     "acc/final_filtered": corrects / len(final_sample),
+                     "filter_ratios/final": filter_ratios[-1],
+                     "global_step": global_step})
+
+        return final_sample, info
 
     # Sampling loop
     img_idx = 0
+    list_acc_unfiltered = []
+    list_acc_filtered = []
     for batch_labels, batch_captions in dataloader:
         # check if the img is already generated
         if (output_dir / f'sample_{img_idx:05d}.png').exists():
             img_idx += len(batch_labels)
             continue
 
-        _ = sample_batch(img_idx, model, diffusion, batch_labels)
+        samples, info = sample_batch(img_idx, model, diffusion, batch_labels)
+
+        list_acc_unfiltered.append(info["acc/final_unfiltered"])
+        list_acc_filtered.append(info["acc/final_filtered"])
+
+        samples = samples[th.randint(0, len(samples), size=(1,))]
+        samples = ((samples + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu() / 255.
 
         # Save individual images with captions
+        grid = make_grid(samples, nrow=int(np.sqrt(len(samples))), padding=0)
+        save_image(grid, output_dir / f'sample_{img_idx:05d}.png')
         with open(output_dir / f'sample_{img_idx:05d}.txt', 'w') as f:
             f.write(batch_captions[0])
+        wandb.log({"sample": [wandb.Image(Image.open(output_dir / f'sample_{img_idx:05d}.png'), caption=batch_captions[0])],
+                   "global_step": img_idx,
+                   "avg_acc/final_unfiltered": np.mean(list_acc_unfiltered),
+                   "avg_acc/final_filtered": np.mean(list_acc_filtered),
+                   **info})
         img_idx += 1
 
         if img_idx >= cfg.max_samples_for_generation:

@@ -3,6 +3,7 @@ from omegaconf import DictConfig, OmegaConf
 import numpy as np
 from typing import Union
 import os
+import json
 
 import argparse
 import torch as th
@@ -25,6 +26,8 @@ from torchvision.utils import make_grid, save_image
 from tqdm.auto import tqdm
 import wandb
 from utils import plot_energy_histogram
+# from sam2.build_sam import build_sam2
+# from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 
 class CLEVRPosDataset(Dataset):
@@ -111,7 +114,7 @@ class CLEVRRelDataset(Dataset):
 
 
 @th.no_grad()
-def calculate_classification_score(classifier: th.nn.Module,
+def calculate_classification_score_rel(classifier: th.nn.Module,
                                    samples: th.Tensor,
                                    labels: th.Tensor,
                                    device: Union[th.device, str]):
@@ -137,6 +140,38 @@ def calculate_classification_score(classifier: th.nn.Module,
         result += (outputs[:,0] < outputs[:,1]).long()
     corrects = th.sum(result == len(labels))
     return corrects.clone().cpu().item()
+
+
+# @th.no_grad()
+# def calculate_classification_score_pos(model: th.nn.Module,
+#         input_points = np.array(origin_points)
+#         input_points[:, 0] = input_points[:, 0] * len(image)
+#         input_points[:, 1] = (1 - input_points[:, 1]) * len(image[0])
+#         input_labels = np.array([1] * len(input_points))
+#         draw_labels =  np.array([1] * len(input_points))
+
+#         masks_batch, _, _ = predictor.predict_batch(
+#             point_coords_batch=[p[np.newaxis] for p in input_points],
+#             point_labels_batch=[l[np.newaxis] for l in input_labels],
+#             multimask_output=True,
+#         )
+
+#         success = True
+#         for i, masks in zip(range(len(input_points)), masks_batch):
+#             point = input_points[[i], :]
+#             label = input_labels[[i]]
+#             # print(f"Point {i+1}: {point} with label {label}")
+
+#             success_per_point = ((masks.sum(axis=(1, 2)) > 100) & (masks.sum(axis=(1, 2)) < 1000)).any()
+#             success = success and success_per_point
+
+#             if not success_per_point:
+#                 draw_labels[i] = 0
+
+#             # update the positive and negative samples
+#             if not success_per_point:
+#                 negative_im_paths.append(f'sample_{example_idx}.png')
+#                 negative_labels.append(origin_points[i])
 
 
 @hydra.main(config_path="../conf")
@@ -247,6 +282,20 @@ def main(cfg: DictConfig):
 
             return [create_condition_denoise_fn(rel_idx) for rel_idx in range(num_relations_per_sample)]
 
+
+            # half = x_t[::num_relations_per_sample]
+            # combined = th.repeat_interleave(half, num_relations_per_sample, dim=0)
+            # model_out = model(combined, ts, **kwargs)
+            # eps, rest = model_out[:, :3], model_out[:, 3:]
+            # masks = kwargs.get('masks')
+            # cond_eps, uncond_eps = eps[masks], eps[~masks]
+            # uncond_eps = uncond_eps.view(batch_size, -1, *uncond_eps.shape[1:])
+            # cond_eps = cond_eps.view(batch_size, -1, *cond_eps.shape[1:])
+            # half_eps = uncond_eps + (weights * (cond_eps - uncond_eps)).sum(dim=1, keepdim=True)
+            # # -> (batch_size, 1, 3, H, W)
+            # eps = th.repeat_interleave(half_eps, num_relations_per_sample, dim=1).view(-1, *half_eps.shape[2:])
+            # return th.cat([eps, rest], dim=1)
+
         def composed_model_fn(x_t, ts, batch_size=cfg.mini_batch // num_relations_per_sample):
             num_samples = x_t.shape[0]
             results_eps = []
@@ -288,69 +337,75 @@ def main(cfg: DictConfig):
 
         conditions_denoise_fn = conditions_denoise_fn_factory(labels)
 
-        method = lambda **kwargs: baselines_clevr.diffusion_baseline(
-            denoise_fn=kwargs["composed_denoise_fn"],
-            diffusion=kwargs["noise_scheduler"],
-            x_shape=kwargs["x_shape"],
-            eval_batch_size=100,
-        )
-
-        for condition_idx, condition_denoise_fn in enumerate(conditions_denoise_fn[:-1]):
-            condition_samples = method(
-                composed_denoise_fn=lambda x, t: condition_denoise_fn(x, t, use_cfg=True),
-                unconditioned_denoise_fn=condition_denoise_fn,
-                x_shape=(3, options["image_size"], options["image_size"]),
-                algebras=["product"],
-                bootstrap_cfg=cfg.bootstrap,
-                elbo_cfg=cfg.elbo,
-                rejection_scheduler_cfg=cfg.rejection_scheduler,
-                noise_scheduler=diffusion,
-                **cfg.rejection,
-            )
-
-            final_condition_sample = condition_samples[-1]
-            # save sample to png in output_dir
-            final_condition_sample = ((final_condition_sample + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu() / 255.
-            for i, sample in enumerate(final_condition_sample):
-                grid = make_grid(sample, nrow=1, padding=0)
-                save_image(grid, output_dir / f'condition_sample_{global_step:05d}_condition_{condition_idx:02d}step_{i:02d}.png')
-
-        composed_samples = \
-        method(
+        samples, original_samples, energies = \
+        baselines_clevr.best_of_n_sampling(
             composed_denoise_fn=composed_model_fn,
             unconditioned_denoise_fn=conditions_denoise_fn[-1],
             conditions_denoise_fn=conditions_denoise_fn[:-1],
             x_shape=(3, options["image_size"], options["image_size"]),
             algebras=["product"]*(num_relations_per_sample-1),
-            bootstrap_cfg=cfg.bootstrap,
-            elbo_cfg=cfg.elbo,
-            rejection_scheduler_cfg=cfg.rejection_scheduler,
             noise_scheduler=diffusion,
-            **cfg.rejection,
+            best_of_n_scheduler_cfg=cfg.best_of_n_scheduler,
+            elbo_cfg=cfg.elbo,
+            **cfg.best_of_n,
         )
 
-        final_composed_sample = composed_samples[-1]
-        # save sample to png in output_dir
-        final_composed_sample = ((final_composed_sample + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu() / 255.
-        for i, sample in enumerate(final_composed_sample):
-            grid = make_grid(sample, nrow=1, padding=0)
-            save_image(grid, output_dir / f'composed_sample_{global_step:05d}_step_{i:02d}.png')
+        final_samples = samples[-1]
 
-        return final_composed_sample
+        info = {}
+
+        # info.update({"acc/final_unfiltered": corrects_unfiltered / len(final_unfiltered_sample),
+        #              "acc/final_filtered": corrects / len(final_sample),
+        #              "filter_ratios/final": filter_ratios[-1],
+        #              "global_step": global_step})
+
+        return final_samples, original_samples, energies, info
 
     # Sampling loop
     img_idx = 0
+    list_acc_unfiltered = []
+    list_acc_filtered = []
     for batch_labels, batch_captions in dataloader:
         # check if the img is already generated
         if (output_dir / f'sample_{img_idx:05d}.png').exists():
             img_idx += len(batch_labels)
             continue
 
-        _ = sample_batch(img_idx, model, diffusion, batch_labels)
+        samples, original_samples, energies, info = sample_batch(img_idx, model, diffusion, batch_labels)
+
+        # list_acc_unfiltered.append(info["acc/final_unfiltered"])
+        # list_acc_filtered.append(info["acc/final_filtered"])
+
+        samples = samples[th.randint(0, len(samples), size=(1,))]
+        samples = ((samples + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu() / 255.
+
+        final_original_samples = ((original_samples[0] + 1) * 127.5).round().clamp(0, 255).to(th.uint8).cpu() / 255.
 
         # Save individual images with captions
+        grid = make_grid(samples, nrow=int(np.sqrt(len(samples))), padding=0)
+        save_image(grid, output_dir / f'sample_{img_idx:05d}.png')
+
+        for i, sample in enumerate(final_original_samples):
+            grid = make_grid(sample[None, :], nrow=1, padding=0)
+            save_image(grid, output_dir / f'original_sample_{img_idx:05d}_{i:05d}.png')
+        # grid = make_grid(final_original_samples, nrow=int(np.sqrt(len(final_original_samples))), padding=0)
+        # save_image(grid, output_dir / f'original_{img_idx:05d}.png')
+
+        # save energies to txt
+        with open(output_dir / f'energies_{img_idx:05d}.txt', 'w') as f:
+            for energy in energies[0]:
+                for e in energy:
+                    # scientific notation
+                    f.write(f'{e:.2e} ')
+                f.write('\n')
+
         with open(output_dir / f'sample_{img_idx:05d}.txt', 'w') as f:
             f.write(batch_captions[0])
+        wandb.log({"sample": [wandb.Image(Image.open(output_dir / f'sample_{img_idx:05d}.png'), caption=batch_captions[0])],
+                   "global_step": img_idx,
+                #    "avg_acc/final_unfiltered": np.mean(list_acc_unfiltered),
+                #    "avg_acc/final_filtered": np.mean(list_acc_filtered),
+                   **info})
         img_idx += 1
 
         if img_idx >= cfg.max_samples_for_generation:

@@ -13,13 +13,18 @@ batch_size: 32
 cfg_weight: 7.5
 # for evaluation
 max_samples_for_generation: 100
-mini_batch: 100
+mini_batch: 10
 
 # for rejection sampling
 rejection:
   eval_batch_size: 10
   mini_batch: ${mini_batch}
   reject_using_interval: false
+
+# for best_of_n sampling
+best_of_n:
+  n: 10
+  mini_batch: ${mini_batch}
 
 # for ELBO estimation
 elbo:
@@ -32,6 +37,11 @@ elbo:
 rejection_scheduler:
   method: uniform
   timesteps_to_select: 2
+
+# for best-of-n sampling
+best_of_n_scheduler:
+  method: latest
+  timesteps_to_select: 1
 
 # for support interval estimation
 bootstrap:
