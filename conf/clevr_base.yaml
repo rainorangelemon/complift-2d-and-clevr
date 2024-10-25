@@ -6,7 +6,7 @@ num_constraints: ??? # choose among {1, 2, 3}
 experiment_name: ${now:%m-%d_%H-%M-%S}_${model.dataset}_${num_constraints}_${method_name}
 ckpt_path: ComposableDiff/models/${model.dataset}.pt
 data_path: ComposableDiff/dataset/test_${model.dataset}_5000_${num_constraints}.npz
-output_dir: runs/${now:%m-%d_%H-%M-%S}
+output_dir: runs/${now:%m-%d_%H-%M-%S}_${experiment_name}
 
 # for inference
 batch_size: 32

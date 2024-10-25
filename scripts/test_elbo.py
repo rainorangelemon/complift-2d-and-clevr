@@ -44,7 +44,9 @@ with torch.no_grad():
                               t=t[0],
                               n_samples=probe_samples,
                               seed=42,
-                              mini_batch=100)
+                              mini_batch=100,
+                              same_noise=False,
+                              sample_timesteps="random")
         energy = model.energy(sample, t)
         # plot the distribution of elbo and energy on 2 subplots
         plt.clf()

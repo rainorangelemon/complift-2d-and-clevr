@@ -8,6 +8,7 @@ wandb
 *.tar
 runs
 .vscode
+logs*
 __pycache__
 DiT
 __pycache__/

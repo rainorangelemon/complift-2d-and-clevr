@@ -29,7 +29,7 @@ from utils import plot_energy_histogram
 from copy import deepcopy
 import matplotlib.pyplot as plt
 import ComposableDiff
-from typing import Callable
+from typing import Callable, Tuple
 
 
 device = th.device('cuda' if th.cuda.is_available() else 'cpu')
@@ -289,6 +289,34 @@ def remove_noise_to_t(noise_scheduler: ComposableDiff.composable_diffusion.gauss
     s2 = s2.to(device).float()
 
     return (x_k - s2 * x_noise) / s1
+
+
+def get_s1_and_s2(noise_scheduler: ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
+                  t: int,
+                  k: int) -> Tuple[th.Tensor, th.Tensor]:
+    """get s1 and s2 for the diffusion process
+
+    Args:
+        noise_scheduler (ComposableDiff.composable_diffusion.respace.SpacedDiffusion): noise scheduler
+        t (int): timestep t
+        k (int): timestep k
+
+    Returns:
+        th.Tensor: s1, s2 (batch, n_features)
+    """
+    alphas = 1 - noise_scheduler.betas
+    log_alphas = th.log(to_tensor(alphas).to(device))
+    is_earlier_timesteps = (th.arange(noise_scheduler.num_timesteps, device=device) < t)
+    log_alphas[is_earlier_timesteps] = 0
+
+    log_alphas_cumsum = th.cumsum(log_alphas, dim=0)
+    alphas_cumprod = th.exp(log_alphas_cumsum)
+    sqrt_alphas_cumprod = alphas_cumprod ** 0.5
+    sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
+
+    s1 = sqrt_alphas_cumprod[k]
+    s2 = sqrt_one_minus_alphas_cumprod[k]
+    return s1, s2
 
 
 @th.no_grad()
@@ -559,52 +587,70 @@ def main(cfg: DictConfig):
     grid = make_grid(unnormalized_all_samples, nrow=5)
     save_image(grid, output_dir / f"cropped_samples.png")
 
+    packed_l2_distance = th.zeros((len(all_samples), 100, 1000), device=all_samples.device)
+
     # test add_noise_at_t
-    for seed in range(100):
+    for seed in tqdm(range(100)):
         th.manual_seed(seed)
         th.cuda.manual_seed(seed)
-        noise = th.randn_like(all_samples[0, ...], device=all_samples.device)[None, ...].expand(len(all_samples), -1, -1, -1)
+        noise = th.randn_like(all_samples)
         timesteps_t = th.full((len(all_samples),), 0, dtype=th.long, device=all_samples.device)
-        for k in tqdm(range(1000)):
+        for k in range(1000):
             timesteps_k = th.full((len(all_samples),), k, dtype=th.long, device=all_samples.device)
-            noisy_x = add_noise_at_t(diffusion.base_diffusion, all_samples, noise, timesteps_t, timesteps_k)
 
-            # check the predicted x0
-            predicted_noise = conditions_denoise_fn[condition_idx](noisy_x, timesteps_k)[:, :3]
-            x0 = remove_noise_to_t(diffusion.base_diffusion, noisy_x, predicted_noise, timesteps_t, timesteps_k)
+            # load the L2 distance from pt file
+            l2_distance = th.load(f"runs/10-24_01-54-35_100_seeds/test_clevr_pos_5000_5/energy_seed_{seed:05d}_timestep_{k:05d}.pt",
+                                  weights_only=True)["l2_distance"]
 
-            # save the image
-            unnormalized_noise_x = ((noisy_x + 1.0) / 2.0).clamp(0, 1)
-            grid = make_grid(unnormalized_noise_x, nrow=5)
-            save_image(grid, output_dir / f"noise_x_{k:05d}.png")
-
-            unnormalized_x0 = ((x0 + 1.0) / 2.0).clamp(0, 1)
-            grid = make_grid(unnormalized_x0, nrow=5)
-            save_image(grid, output_dir / f"x0_{k:05d}.png")
-
-            # get the L2 distance
-            l2_distance = (predicted_noise - noise).pow(2).sum(dim=(1, 2, 3))
-            cosine_distance = th.nn.functional.cosine_similarity(predicted_noise.flatten(1), noise.flatten(1), dim=1)
+            packed_l2_distance[:, seed, k] = l2_distance
 
             # # plot the histogram
             # im_pos = plot_energy_histogram(l2_distance[:len(positive_ims)].cpu().numpy())
             # im_neg = plot_energy_histogram(l2_distance[len(positive_ims):].cpu().numpy())
 
-            # use scikit to calculate the auc
-            from sklearn.metrics import roc_auc_score
-            labels = [1] * len(positive_ims) + [0] * len(negative_ims)
-            auc = roc_auc_score(labels, -l2_distance.cpu().numpy())
-            auc_cosine = roc_auc_score(labels, cosine_distance.cpu().numpy())
+            # im_pos_clamp = plot_energy_histogram(l2_distance_clamp[:len(positive_ims)].cpu().numpy())
+            # im_neg_clamp = plot_energy_histogram(l2_distance_clamp[len(positive_ims):].cpu().numpy())
 
-            # log to wandb
-            wandb.log({
-                    #    f"{seed}/l2_distance_pos": [wandb.Image(im_pos, caption=f"timestep {k}")],
-                    #    f"{seed}/l2_distance_neg": [wandb.Image(im_neg, caption=f"timestep {k}")],
-                       f"auc/{seed}": auc,
-                       f"auc_cosine/{seed}": auc_cosine})
+            # # use scikit to calculate the auc
+            # from sklearn.metrics import roc_auc_score
+            # labels = [1] * len(positive_ims) + [0] * len(negative_ims)
+            # auc = roc_auc_score(labels, -l2_distance.cpu().numpy())
+            # auc_clamp = roc_auc_score(labels, -l2_distance_clamp.cpu().numpy())
 
-            # save energy to pt file
-            th.save({"l2_distance": l2_distance, "cosine_distance": cosine_distance}, output_dir / f"energy_seed_{seed:05d}_timestep_{k:05d}.pt")
+            # # log to wandb
+            # wandb.log({f"{seed}/l2_distance_pos": [wandb.Image(im_pos, caption=f"timestep {k}")],
+            #            f"{seed}/l2_distance_neg": [wandb.Image(im_neg, caption=f"timestep {k}")],
+            #            f"auc/{seed}": auc,
+            #            f"{seed}/l2_distance_pos_clamp": [wandb.Image(im_pos_clamp, caption=f"timestep {k}")],
+            #            f"{seed}/l2_distance_neg_clamp": [wandb.Image(im_neg_clamp, caption=f"timestep {k}")],
+            #            f"auc_clamp/{seed}": auc_clamp})
+
+    # log the auc across timesteps to wandb
+    for k in range(1000):
+        l2_distance = packed_l2_distance[:, :, k]
+        l2_distance = l2_distance.mean(dim=1)
+        labels = [1] * len(positive_ims) + [0] * len(negative_ims)
+        from sklearn.metrics import roc_auc_score
+        auc = roc_auc_score(labels, -l2_distance.cpu().numpy())
+        wandb.log({f"auc": auc,
+                   "timestep": k})
+
+    import pdb
+    pdb.set_trace()
+
+    # log the overall auc
+    l2_distance = packed_l2_distance.mean(dim=(1, 2))
+    labels = [1] * len(positive_ims) + [0] * len(negative_ims)
+    overall_auc = roc_auc_score(labels, -l2_distance.cpu().numpy())
+    wandb.log({"overall_auc": overall_auc})
+
+    # rank_sample = th.argsort(packed_l2_distance, dim=0)
+    # # plot the histogram of rank for each sample
+    # for i in range(len(all_samples)):
+    #     plt.clf()
+    #     plt.close('all')
+    #     plt.hist(rank_sample[i, :].flatten().cpu().numpy(), bins=len(all_samples))
+    #     plt.savefig(output_dir / f"rank_sample_{i}.png")
 
     exit()
 

@@ -96,6 +96,7 @@ class TrainLoop:
             ]
 
         if th.cuda.is_available():
+            th.set_float32_matmul_precision('high')
             self.use_ddp = True
             self.ddp_model = DDP(
                 self.model,

@@ -540,7 +540,6 @@ class UNetModel(nn.Module):
         self.middle_block.apply(convert_module_to_f32)
         self.output_blocks.apply(convert_module_to_f32)
 
-    # @th.compile(mode="max-autotune")
     def forward(self, x, timesteps, y=None, masks=None, layer_idx=None):
         """
         Apply the model to an input batch.

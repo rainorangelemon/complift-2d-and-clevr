@@ -1,3 +1,4 @@
 #!/bin/bash
-python -m scripts.best_of_n_on_sam_dataset --config-name=clevr_pos num_constraints=5 method_name=best_of_n max_samples_for_generation=10 elbo.same_noise=false elbo.sample_timesteps=random elbo.n_samples=100 elbo.use_cfg=false best_of_n.n=100 experiment_name=100_no_cfg
-python -m scripts.best_of_n_on_sam_dataset --config-name=clevr_pos num_constraints=5 method_name=best_of_n max_samples_for_generation=10 elbo.same_noise=false elbo.sample_timesteps=random elbo.n_samples=100 elbo.use_cfg=true best_of_n.n=100 experiment_name=100_cfg
+python -m scripts.best_of_n_on_sam_dataset --config-name=clevr_pos num_constraints=5 method_name=best_of_n max_samples_for_generation=10 elbo.same_noise=true elbo.sample_timesteps=interleave elbo.n_samples=1000 elbo.use_cfg=false best_of_n.n=100 experiment_name=1000_no_cfg_same_noise
+python -m scripts.best_of_n_on_sam_dataset --config-name=clevr_pos num_constraints=5 method_name=best_of_n max_samples_for_generation=10 elbo.same_noise=false elbo.sample_timesteps=random elbo.n_samples=1000 elbo.use_cfg=false best_of_n.n=100 experiment_name=1000_no_cfg
+python -m scripts.best_of_n_on_sam_dataset --config-name=clevr_pos num_constraints=5 method_name=best_of_n max_samples_for_generation=10 elbo.same_noise=false elbo.sample_timesteps=random elbo.n_samples=1000 elbo.use_cfg=true best_of_n.n=100 experiment_name=1000_cfg
