@@ -142,6 +142,17 @@ def calculate_classification_score_rel(classifier: th.nn.Module,
     return corrects.clone().cpu().item()
 
 
+def show_points(coords, ax, marker_size=375):
+    import copy
+    coords = copy.deepcopy(coords)
+    coords[:, 0] = coords[:, 0] * 128
+    coords[:, 1] = (1 - coords[:, 1]) * 128
+    ax.scatter(coords[:, 0], coords[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
+    # label the points with the index
+    for i, (x, y) in enumerate(coords):
+        ax.text(x, y, str(i), fontsize=12, color='white', ha='center', va='center')
+
+
 # @th.no_grad()
 # def calculate_classification_score_pos(model: th.nn.Module,
 #         input_points = np.array(origin_points)
@@ -388,6 +399,15 @@ def main(cfg: DictConfig):
         for i, sample in enumerate(final_original_samples):
             grid = make_grid(sample[None, :], nrow=1, padding=0)
             save_image(grid, output_dir / f'original_sample_{img_idx:05d}_{i:05d}.png')
+
+            import matplotlib.pyplot as plt
+            plt.close('all')
+            plt.clf()
+            plt.figure(figsize=(10, 10))
+            plt.imshow(sample.permute(1, 2, 0))
+            show_points(batch_labels[0].numpy(), plt.gca())
+            plt.axis('on')
+            plt.savefig(output_dir / f'labelled_sample_{img_idx:05d}_{i:05d}.png')
         # grid = make_grid(final_original_samples, nrow=int(np.sqrt(len(final_original_samples))), padding=0)
         # save_image(grid, output_dir / f'original_{img_idx:05d}.png')
 

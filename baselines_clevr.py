@@ -60,7 +60,7 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
 
         indices = tqdm(indices)
 
-    samples = []
+    samples = [sample.cpu()]
     for i in indices:
         t = torch.full((len(sample),), i, dtype=torch.long, device=device)
         if len(sample):

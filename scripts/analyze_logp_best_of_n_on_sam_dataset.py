@@ -588,6 +588,7 @@ def main(cfg: DictConfig):
     save_image(grid, output_dir / f"cropped_samples.png")
 
     packed_l2_distance = th.zeros((len(all_samples), 100, 1000), device=all_samples.device)
+    packed_l2_distance_uncond = th.zeros((len(all_samples), 100, 1000), device=all_samples.device)
 
     # test add_noise_at_t
     for seed in tqdm(range(100)):
@@ -598,11 +599,17 @@ def main(cfg: DictConfig):
         for k in range(1000):
             timesteps_k = th.full((len(all_samples),), k, dtype=th.long, device=all_samples.device)
 
-            # load the L2 distance from pt file
-            l2_distance = th.load(f"runs/10-24_01-54-35_100_seeds/test_clevr_pos_5000_5/energy_seed_{seed:05d}_timestep_{k:05d}.pt",
-                                  weights_only=True)["l2_distance"]
+            # filename = f"runs/10-25_11-33-33_test_predict_at_middle/test_clevr_pos_5000_5/energy_seed_{seed:05d}_timestep_{k:05d}.pt"
+            # filename = f"runs/10-25_17-40-43_with_variance/test_clevr_pos_5000_5/energy_seed_{seed:05d}_timestep_{k:05d}.pt"
+            # filename = f"runs/10-26_01-48-29_with_variance_test_idx_8/test_clevr_pos_5000_5/energy_seed_{seed:05d}_timestep_{k:05d}.pt"
+            # filename = f"runs/10-26_13-09-04_linear_schedule_model_runpod_idx_1/test_clevr_pos_5000_5/energy_seed_{seed:05d}_timestep_{k:05d}.pt"
+            filename = f"runs/10-27_06-56-44_linear_schedule_model_runpod_idx_3/test_clevr_pos_5000_5/energy_seed_{seed:05d}_timestep_{k:05d}.pt"
 
-            packed_l2_distance[:, seed, k] = l2_distance
+            if os.path.exists(filename):
+                l2_distance = th.load(filename, weights_only=True)["l2_distance"]
+                l2_distance_uncond = th.load(filename, weights_only=True)["l2_distance_uncond"]
+                packed_l2_distance[:, seed, k] = l2_distance
+                packed_l2_distance_uncond[:, seed, k] = l2_distance_uncond
 
             # # plot the histogram
             # im_pos = plot_energy_histogram(l2_distance[:len(positive_ims)].cpu().numpy())
@@ -626,23 +633,60 @@ def main(cfg: DictConfig):
             #            f"auc_clamp/{seed}": auc_clamp})
 
     # log the auc across timesteps to wandb
+    weights = (diffusion.base_diffusion.betas ** 2) / ((1 - diffusion.base_diffusion.betas) * (1 - diffusion.base_diffusion.alphas_cumprod))
     for k in range(1000):
-        l2_distance = packed_l2_distance[:, :, k]
-        l2_distance = l2_distance.mean(dim=1)
+        l2_distance = packed_l2_distance[:, :, k].mean(dim=1)
+        l2_distance_uncond = packed_l2_distance_uncond[:, :, k].mean(dim=1)
+        l2_distance_diff = l2_distance - l2_distance_uncond
+
+        scale_diff = l2_distance_diff.max() - l2_distance_diff.min()
+
         labels = [1] * len(positive_ims) + [0] * len(negative_ims)
         from sklearn.metrics import roc_auc_score
         auc = roc_auc_score(labels, -l2_distance.cpu().numpy())
+        auc_uncond = roc_auc_score(labels, -l2_distance_uncond.cpu().numpy())
+        auc_diff = roc_auc_score(labels, -l2_distance_diff.cpu().numpy())
         wandb.log({f"auc": auc,
+                   f"auc_uncond": auc_uncond,
+                   f"auc_diff": auc_diff,
+                   f"scale_diff": scale_diff,
+                   f"diff/pos_min": l2_distance_diff[:len(positive_ims)].min(),
+                   f"diff/pos_max": l2_distance_diff[:len(positive_ims)].max(),
+                   f"diff/neg_min": l2_distance_diff[len(positive_ims):].min(),
+                   f"diff/neg_max": l2_distance_diff[len(positive_ims):].max(),
+                   f"weights": weights[k],
                    "timestep": k})
-
-    import pdb
-    pdb.set_trace()
 
     # log the overall auc
     l2_distance = packed_l2_distance.mean(dim=(1, 2))
+    l2_distance_uncond = packed_l2_distance_uncond.mean(dim=(1, 2))
+    l2_distance_diff = (packed_l2_distance - packed_l2_distance_uncond).mean(dim=1)
+    exists_under_zero = (l2_distance_diff < 0).any(dim=0)
+    at_later_timesteps = th.arange(1000, device=l2_distance_diff.device) > 500
+    l2_distance_diff = l2_distance_diff[:, exists_under_zero & at_later_timesteps].mean(dim=1)
     labels = [1] * len(positive_ims) + [0] * len(negative_ims)
     overall_auc = roc_auc_score(labels, -l2_distance.cpu().numpy())
-    wandb.log({"overall_auc": overall_auc})
+    overall_auc_uncond = roc_auc_score(labels, -l2_distance_uncond.cpu().numpy())
+    overall_auc_diff = roc_auc_score(labels, -l2_distance_diff.cpu().numpy())
+    wandb.log({"overall_auc": overall_auc,
+               "overall_auc_uncond": overall_auc_uncond,
+               "overall_auc_diff": overall_auc_diff})
+
+    # log the reweighted auc
+    weights = th.tensor(weights).to(packed_l2_distance.device).flatten()
+    l2_distance_reweighted = (packed_l2_distance * weights).mean(dim=(1, 2))
+    l2_distance_uncond_reweighted = (packed_l2_distance_uncond * weights).mean(dim=(1, 2))
+    l2_distance_diff_reweighted = ((packed_l2_distance - packed_l2_distance_uncond) * weights).mean(dim=1)
+    l2_distance_diff_reweighted = l2_distance_diff_reweighted[:, exists_under_zero & at_later_timesteps].mean(dim=1)
+    overall_auc_reweighted = roc_auc_score(labels, -l2_distance_reweighted.cpu().numpy())
+    overall_auc_uncond_reweighted = roc_auc_score(labels, -l2_distance_uncond_reweighted.cpu().numpy())
+    overall_auc_diff_reweighted = roc_auc_score(labels, -l2_distance_diff_reweighted.cpu().numpy())
+    wandb.log({"overall_auc_reweighted": overall_auc_reweighted,
+               "overall_auc_uncond_reweighted": overall_auc_uncond_reweighted,
+               "overall_auc_diff_reweighted": overall_auc_diff_reweighted})
+
+    import pdb
+    pdb.set_trace()
 
     # rank_sample = th.argsort(packed_l2_distance, dim=0)
     # # plot the histogram of rank for each sample

@@ -101,7 +101,7 @@ def conditions_denoise_fn_factory(model, labels, batch_size, cfg):
                     result = th.cat([eps, rest[~expanded_mask]], dim=1)
                 else:
                     result = model(x_t_batch, ts_batch, y=expanded_label, masks=expanded_mask)
-                results.append(result)
+                results.append(result.clone())
 
             # Concatenate the results from all batches
             return th.cat(results, dim=0)
@@ -523,10 +523,21 @@ def main(cfg: DictConfig):
     dataset = CLEVRPosDataset(data_path=cfg.data_path)
 
     # Sampling loop
-    condition_idx = 1
-    test_idx = 1
-    positive_ims = [np.array(Image.open(f"runs/10-21_17-39-55/test_clevr_pos_5000_5/original_sample_{test_idx:05d}_{i:05d}.png").convert("RGB")) for i in [3, 6, 20, 31, 45, 46, 69, 76, 77, 82]]
-    negative_ims = [np.array(Image.open(f"runs/10-21_17-39-55/test_clevr_pos_5000_5/original_sample_{test_idx:05d}_{i:05d}.png").convert("RGB")) for i in [81, 83, 53, 29, 16, 13, 11, 00, 74, 47]]
+    # condition_idx = 1
+    # test_idx = 1
+    # positive_ims = [np.array(Image.open(f"runs/10-21_17-39-55/test_clevr_pos_5000_5/original_sample_{test_idx:05d}_{i:05d}.png").convert("RGB")) for i in [3, 6, 20, 31, 45, 46, 69, 76, 77, 82]]
+    # negative_ims = [np.array(Image.open(f"runs/10-21_17-39-55/test_clevr_pos_5000_5/original_sample_{test_idx:05d}_{i:05d}.png").convert("RGB")) for i in [81, 83, 53, 29, 16, 13, 11, 00, 74, 47]]
+
+    condition_idx = 3
+    test_idx = 3
+    positive_ims = [np.array(Image.open(f"runs/10-26_00-27-56_clevr_pos_5_best_of_n/test_clevr_pos_5000_5/original_sample_{test_idx:05d}_{i:05d}.png").convert("RGB")) for i in [7, 8, 10, 11, 12, 14, 15, 18, 20, 21]]
+    negative_ims = [np.array(Image.open(f"runs/10-26_00-27-56_clevr_pos_5_best_of_n/test_clevr_pos_5000_5/original_sample_{test_idx:05d}_{i:05d}.png").convert("RGB")) for i in [0, 5, 9, 16, 17, 19, 29, 30, 32, 33]]
+
+    # condition_idx = 3
+    # test_idx = 8
+    # positive_ims = [np.array(Image.open(f"runs/10-26_00-27-56_clevr_pos_5_best_of_n/test_clevr_pos_5000_5/original_sample_{test_idx:05d}_{i:05d}.png").convert("RGB")) for i in [1, 2, 8, 14, 20, 22, 35, 37, 38, 39]]
+    # negative_ims = [np.array(Image.open(f"runs/10-26_00-27-56_clevr_pos_5_best_of_n/test_clevr_pos_5000_5/original_sample_{test_idx:05d}_{i:05d}.png").convert("RGB")) for i in [0, 10, 16, 17, 19, 21, 25, 27, 30, 36]]
+
     labels, _ = dataset[test_idx]
 
     conditions_denoise_fn = conditions_denoise_fn_factory(model, th.tensor(labels[np.newaxis], dtype=th.float32),
@@ -560,7 +571,7 @@ def main(cfg: DictConfig):
     save_image(grid, output_dir / f"cropped_samples.png")
 
     # test add_noise_at_t
-    for seed in range(100):
+    for seed in range(16):
         th.manual_seed(seed)
         th.cuda.manual_seed(seed)
         noise = th.randn_like(all_samples[0, ...], device=all_samples.device)[None, ...].expand(len(all_samples), -1, -1, -1)
@@ -570,8 +581,29 @@ def main(cfg: DictConfig):
             noisy_x = add_noise_at_t(diffusion.base_diffusion, all_samples, noise, timesteps_t, timesteps_k)
 
             # check the predicted x0
-            predicted_noise = conditions_denoise_fn[condition_idx](noisy_x, timesteps_k)[:, :3]
+            pred = conditions_denoise_fn[condition_idx](noisy_x, timesteps_k)
+            predicted_noise = pred[:, :3]
+            model_var_values = pred[:, 3:]
+
+            # get the variance of the predicted noise
+            min_log = diffusion.base_diffusion.posterior_log_variance_clipped[k]
+            max_log = np.log(diffusion.base_diffusion.betas)[k]
+            # The model_var_values is [-1, 1] for [min_var, max_var].
+            frac = (model_var_values + 1) / 2
+            model_log_variance = frac * max_log + (1 - frac) * min_log
+            model_variance = th.exp(model_log_variance)
+
             x0 = remove_noise_to_t(diffusion.base_diffusion, noisy_x, predicted_noise, timesteps_t, timesteps_k)
+
+            pred_uncond = conditions_denoise_fn[-1](noisy_x, timesteps_k)
+            predicted_noise_uncond = pred_uncond[:, :3]
+            model_var_values_uncond = pred_uncond[:, 3:]
+
+            frac_uncond = (model_var_values_uncond + 1) / 2
+            model_log_variance_uncond = frac_uncond * max_log + (1 - frac_uncond) * min_log
+            model_variance_uncond = th.exp(model_log_variance_uncond)
+
+            x0_uncond = remove_noise_to_t(diffusion.base_diffusion, noisy_x, predicted_noise_uncond, timesteps_t, timesteps_k)
 
             # save the image
             unnormalized_noise_x = ((noisy_x + 1.0) / 2.0).clamp(0, 1)
@@ -582,9 +614,26 @@ def main(cfg: DictConfig):
             grid = make_grid(unnormalized_x0, nrow=5)
             save_image(grid, output_dir / f"x0_{k:05d}.png")
 
+            unnormalized_x0_uncond = ((x0_uncond + 1.0) / 2.0).clamp(0, 1)
+            grid = make_grid(unnormalized_x0_uncond, nrow=5)
+            save_image(grid, output_dir / f"x0_uncond_{k:05d}.png")
+
             # get the L2 distance
-            l2_distance = (predicted_noise - noise).pow(2).sum(dim=(1, 2, 3))
+            l2_distance = ((predicted_noise - noise).pow(2) / model_variance).sum(dim=(1, 2, 3))
             cosine_distance = th.nn.functional.cosine_similarity(predicted_noise.flatten(1), noise.flatten(1), dim=1)
+
+            l2_distance_uncond = ((predicted_noise_uncond - noise).pow(2) / model_variance_uncond).sum(dim=(1, 2, 3))
+            cosine_distance_uncond = th.nn.functional.cosine_similarity(predicted_noise_uncond.flatten(1), noise.flatten(1), dim=1)
+
+            l2_distance_diff = l2_distance - l2_distance_uncond
+            cosine_distance_diff = cosine_distance - cosine_distance_uncond
+
+            l2_distance_diff_cfg = l2_distance_uncond + (cfg.cfg_weight - 1) * l2_distance_diff
+            cosine_distance_diff_cfg = cosine_distance_uncond + (cfg.cfg_weight - 1) * cosine_distance_diff
+
+            # cfg_noise = predicted_noise_uncond + (cfg.cfg_weight - 1) * (predicted_noise - predicted_noise_uncond)
+            # l2_distance_cfg = (cfg_noise - noise).pow(2).sum(dim=(1, 2, 3))
+            # cosine_distance_cfg = th.nn.functional.cosine_similarity(cfg_noise.flatten(1), noise.flatten(1), dim=1)
 
             # # plot the histogram
             # im_pos = plot_energy_histogram(l2_distance[:len(positive_ims)].cpu().numpy())
@@ -596,15 +645,42 @@ def main(cfg: DictConfig):
             auc = roc_auc_score(labels, -l2_distance.cpu().numpy())
             auc_cosine = roc_auc_score(labels, cosine_distance.cpu().numpy())
 
+            auc_uncond = roc_auc_score(labels, -l2_distance_uncond.cpu().numpy())
+            auc_cosine_uncond = roc_auc_score(labels, cosine_distance_uncond.cpu().numpy())
+
+            auc_diff = roc_auc_score(labels, -l2_distance_diff.cpu().numpy())
+            auc_cosine_diff = roc_auc_score(labels, cosine_distance_diff.cpu().numpy())
+
+            auc_diff_cfg = roc_auc_score(labels, -l2_distance_diff_cfg.cpu().numpy())
+            auc_cosine_diff_cfg = roc_auc_score(labels, cosine_distance_diff_cfg.cpu().numpy())
+
+            # auc_cfg = roc_auc_score(labels, -l2_distance_cfg.cpu().numpy())
+            # auc_cosine_cfg = roc_auc_score(labels, cosine_distance_cfg.cpu().numpy())
+
             # log to wandb
             wandb.log({
                     #    f"{seed}/l2_distance_pos": [wandb.Image(im_pos, caption=f"timestep {k}")],
                     #    f"{seed}/l2_distance_neg": [wandb.Image(im_neg, caption=f"timestep {k}")],
                        f"auc/{seed}": auc,
-                       f"auc_cosine/{seed}": auc_cosine})
+                       f"auc_cosine/{seed}": auc_cosine,
+                       f"auc_uncond/{seed}": auc_uncond,
+                       f"auc_cosine_uncond/{seed}": auc_cosine_uncond,
+                       f"auc_diff/{seed}": auc_diff,
+                       f"auc_cosine_diff/{seed}": auc_cosine_diff,
+                       f"auc_diff_cfg/{seed}": auc_diff_cfg,
+                       f"auc_cosine_diff_cfg/{seed}": auc_cosine_diff_cfg,
+                    #    f"auc_cfg/{seed}": auc_cfg,
+                    #    f"auc_cosine_cfg/{seed}": auc_cosine_cfg
+                    })
 
             # save energy to pt file
-            th.save({"l2_distance": l2_distance, "cosine_distance": cosine_distance}, output_dir / f"energy_seed_{seed:05d}_timestep_{k:05d}.pt")
+            th.save({"l2_distance": l2_distance,
+                     "cosine_distance": cosine_distance,
+                     "l2_distance_uncond": l2_distance_uncond,
+                     "cosine_distance_uncond": cosine_distance_uncond,
+                    #  "l2_distance_cfg": l2_distance_cfg,
+                    #  "cosine_distance_cfg": cosine_distance_cfg
+                     }, output_dir / f"energy_seed_{seed:05d}_timestep_{k:05d}.pt")
 
     exit()
 

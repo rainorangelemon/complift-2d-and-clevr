@@ -357,7 +357,7 @@ def calculate_elbo(model: torch.nn.Module,
         seed (int): random seed
         mini_batch (int): mini batch size
         same_noise (bool): whether to use the same noise for all samples
-        sample_timesteps (str): how to sample the timesteps, "random" or "interleave"
+        sample_timesteps (str): how to sample the timesteps, "random" or "interleave" or f"specified{t:d}"
         progress (bool, optional): whether to show the progress bar. Defaults to False.
 
     Returns:
@@ -386,6 +386,10 @@ def calculate_elbo(model: torch.nn.Module,
     elif sample_timesteps == "random":
         # sample timestep randomly from [t, T): (batch, n_sample)
         ts_k = torch.randint(t, T, (1, n_samples), device=x_t.device).expand(B, n_samples)
+    elif sample_timesteps.startswith("specified"):
+        # sample timestep from the specified timesteps
+        specified_timesteps = [int(s) for s in sample_timesteps.split("specified")[1].split(",")]
+        ts_k = torch.tensor(specified_timesteps, device=x_t.device).long()[None, :].expand(B, n_samples)
     else:
         raise ValueError("sample_timesteps should be 'random' or 'interleave'")
 

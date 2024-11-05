@@ -3,7 +3,7 @@ defaults:
 
 method_name: ???  # choose among {baseline, rejection, best_of_n}
 num_constraints: ??? # choose among {1, 2, 3}
-experiment_name: ${now:%m-%d_%H-%M-%S}_${model.dataset}_${num_constraints}_${method_name}
+experiment_name: ${model.dataset}_${num_constraints}_${method_name}
 ckpt_path: ComposableDiff/models/${model.dataset}.pt
 data_path: ComposableDiff/dataset/test_${model.dataset}_5000_${num_constraints}.npz
 output_dir: runs/${now:%m-%d_%H-%M-%S}_${experiment_name}
@@ -31,7 +31,7 @@ elbo:
   use_cfg: false  # better to use no cfg for ELBO
   n_samples: 100
   same_noise: false  # if true, sample the same epsilon for all (t, epsilon) pairs
-  sample_timesteps: random  # choose among {interleave, random}
+  sample_timesteps: interleave  # choose among {interleave, random}
 
 # for rejection sampling
 rejection_scheduler:
