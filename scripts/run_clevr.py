@@ -1,12 +1,11 @@
 import os
-from omegaconf import OmegaConf
 import torch as th
-from scripts.best_of_n_on_sam_dataset import create_model_and_diffusion, CLEVRPosDataset, conditions_denoise_fn_factory
 from pathlib import Path
 import numpy as np
 import baselines_clevr
 from tqdm.auto import tqdm
 from torchvision.utils import save_image, make_grid
+from scripts.best_of_n_on_sam_dataset import create_model_and_diffusion, CLEVRPosDataset, conditions_denoise_fn_factory
 import wandb
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -51,7 +50,7 @@ def main(cfg: DictConfig):
     dataset = CLEVRPosDataset(data_path=cfg.data_path)
 
     # optionally, compile the model for faster execution
-    model = th.compile(model, mode="max-autotune")
+    # model = th.compile(model, mode="max-autotune")
 
 
     def composed_model_fn(x_t, ts, labels, batch_size=cfg.elbo.mini_batch // cfg.num_constraints):
@@ -110,9 +109,9 @@ def main(cfg: DictConfig):
 
     NUM_SAMPLES_PER_TRIAL = 10
 
-    packed_samples = th.zeros((5000, 10, 3, 128, 128))
+    packed_samples = th.zeros((5000, NUM_SAMPLES_PER_TRIAL, 3, 128, 128))
     packed_energies = th.zeros((5000, cfg.num_constraints, NUM_SAMPLES_PER_TRIAL))
-    for test_idx in tqdm(range(5000)):
+    for test_idx in tqdm(range(2)):
 
         th.manual_seed(0)
         th.cuda.manual_seed(0)
@@ -152,6 +151,9 @@ def main(cfg: DictConfig):
                 })
 
     # Save the packed samples
+    packed_samples = (packed_samples + 1) * 127.5
+    # convert packed samples to uint8 to save space
+    packed_samples = packed_samples.round().to(dtype=th.uint8)
     th.save(packed_samples, output_dir / "packed_samples.pt")
     th.save(packed_energies, output_dir / "packed_energies.pt")
 

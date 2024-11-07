@@ -1,9 +1,8 @@
 defaults:
   - _self_
 
-method_name: ???  # choose among {baseline, rejection, best_of_n}
-num_constraints: ??? # choose among {1, 2, 3}
-experiment_name: ${model.dataset}_${num_constraints}_${method_name}
+num_constraints: ??? # choose among {1, 2, 3, 4, 5}
+experiment_name: ???
 ckpt_path: ComposableDiff/models/${model.dataset}.pt
 data_path: ComposableDiff/dataset/test_${model.dataset}_5000_${num_constraints}.npz
 output_dir: runs/${now:%m-%d_%H-%M-%S}_${experiment_name}
