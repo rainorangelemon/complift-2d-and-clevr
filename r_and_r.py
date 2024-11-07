@@ -389,9 +389,9 @@ def calculate_elbo(model: torch.nn.Module,
     elif sample_timesteps.startswith("specified"):
         # sample timestep from the specified timesteps
         specified_timesteps = [int(s) for s in sample_timesteps.split("specified")[1].split(",")]
-        ts_k = torch.tensor(specified_timesteps, device=x_t.device).long()[None, :].expand(B, n_samples)
+        ts_k = torch.tensor(specified_timesteps, device=x_t.device).long().flatten()[None, :].expand(B, n_samples)
     else:
-        raise ValueError("sample_timesteps should be 'random' or 'interleave'")
+        raise ValueError("sample_timesteps should be 'random' or 'interleave' or 'specified{t:d}'")
 
     # estimate the ELBO
     cumprod_alpha_prev = to_tensor(noise_scheduler.alphas_cumprod_prev).to(x_t.device).float()

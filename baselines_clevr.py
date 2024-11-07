@@ -242,15 +242,13 @@ def make_estimate_neg_logp(elbo_cfg: dict[str, Union[bool, str]],
                             noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
                                                     ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
                             unconditioned_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-                            mini_batch: int,
                             progress: bool=False) -> Callable[[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], torch.Tensor, torch.Tensor], torch.Tensor]:
     """Creates a function to estimate the negative log probability using ELBO.
 
     Args:
-        elbo_cfg (dict[str, Union[bool, str]]): Configuration for ELBO estimation, including whether to use CFG, number of samples, and other parameters.
+        elbo_cfg (dict[str, Union[bool, str]]): Configuration for ELBO estimation, including whether to use CFG, number of samples, mini batch size, etc.
         noise_scheduler (Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion, ComposableDiff.composable_diffusion.respace.SpacedDiffusion]): Noise scheduler for the diffusion process.
         unconditioned_denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): Denoising function for the unconditioned model.
-        mini_batch (int): Mini batch size for ELBO estimation.
         progress (bool, optional): Whether to show the progress bar. Defaults to False.
 
     Returns:
@@ -268,7 +266,7 @@ def make_estimate_neg_logp(elbo_cfg: dict[str, Union[bool, str]],
                                             x_t=x,
                                             t=t[0],
                                             seed=t[0],
-                                            mini_batch=mini_batch,
+                                            mini_batch=elbo_cfg["mini_batch"],
                                             n_samples=elbo_cfg["n_samples"],
                                             same_noise=elbo_cfg["same_noise"],
                                             sample_timesteps=elbo_cfg["sample_timesteps"],
@@ -278,7 +276,7 @@ def make_estimate_neg_logp(elbo_cfg: dict[str, Union[bool, str]],
                                     x_t=x,
                                     t=t[0],
                                     seed=t[0],
-                                    mini_batch=mini_batch,
+                                    mini_batch=elbo_cfg["mini_batch"],
                                     n_samples=elbo_cfg["n_samples"],
                                     same_noise=elbo_cfg["same_noise"],
                                     sample_timesteps=elbo_cfg["sample_timesteps"],
@@ -291,7 +289,7 @@ def make_estimate_neg_logp(elbo_cfg: dict[str, Union[bool, str]],
                                             x_t=x,
                                             t=t[0],
                                             seed=t[0],
-                                            mini_batch=mini_batch,
+                                            mini_batch=elbo_cfg["mini_batch"],
                                             n_samples=elbo_cfg["n_samples"],
                                             same_noise=elbo_cfg["same_noise"],
                                             sample_timesteps=elbo_cfg["sample_timesteps"],
@@ -300,50 +298,39 @@ def make_estimate_neg_logp(elbo_cfg: dict[str, Union[bool, str]],
     return estimate_neg_logp
 
 
-def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-                                                               unconditioned_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-                                                               conditions_denoise_fn: List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
-                                                               x_shape: Tuple[int, ...],
-                                                               algebras: List[str],
-                                                               noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
-                                                                                      ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
-                                                               reject_using_interval: bool,
-                                                               eval_batch_size,
-                                                               mini_batch,
-                                                               bootstrap_cfg: dict[str, Union[float, str]],
-                                                               rejection_scheduler_cfg: dict[str, Union[float, str]],
-                                                               elbo_cfg: dict[str, Union[bool, str]],
-                                                               resample=True,
-        ) -> Tuple[List[torch.Tensor], List[float], List[Tuple[torch.Tensor, torch.Tensor]], List[torch.Tensor], List[torch.Tensor], Dict[int, List[torch.Tensor]], Dict[int, List[torch.Tensor]]]:
-    """similar to rejection_sampling_baseline_with_interval_calculation, but using elbo to estimate the -log p instead of energy
+# declare a rejection error
+class RejectionError(Exception):
+    pass
+
+
+def rejection_sampling_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                                unconditioned_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                                conditions_denoise_fn: List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
+                                x_shape: Tuple[int, ...],
+                                noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
+                                                       ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
+                                num_samples_per_trial: int,
+                                rejection_scheduler_cfg: dict[str, Union[float, str]],
+                                elbo_cfg: dict[str, Union[bool, str]],
+                                progress: bool,
+        ) -> Tuple[torch.Tensor, List[torch.Tensor], Dict[int, np.ndarray], Dict[int, List[np.ndarray]]]:
+    """rejection sampling baseline
 
     Args:
         composed_denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): denoising function for the composed model
         unconditioned_denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): denoising function for the unconditioned model
         conditions_denoise_fn (List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]]): denoising function for multiple conditions
         x_shape (Tuple[int, ...]): shape of each sample
-        algebras (str): list of the algebra from ["product", "summation", "negation"]
         noise_scheduler (ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion, optional): noise scheduler. Defaults to None.
-        rejection_using_interval (bool): whether to reject samples using interval or not
-        eval_batch_size (int, optional): Number of samples to
-                                         (1) calculate the support interval,
-                                         (2) generate the samples.
-        mini_batch (int, optional): mini batch size for elbo estimation.
-        bootstrap_cfg (dict[str, Union[float, str]]): configuration for the bootstrap method, including "method" and "confidence"
+        num_samples_per_trial (int, optional): number of samples to generate for each trial.
         rejection_scheduler_cfg (dict[str, Union[float, str]]): configuration for the rejection scheduler
         elbo_cfg (dict[str, Union[bool, str]]): configuration for the elbo estimation
+        progress (bool): whether to show the progress bar
 
     Returns:
-        Tuple[List[torch.Tensor], List[float], List[Tuple[torch.Tensor, torch.Tensor]], List[torch.Tensor], List[torch.Tensor], Dict[int, List[torch.Tensor]], Dict[int, List[torch.Tensor]]:
-        total_samples, filter_ratios, intervals_across_timesteps, datasets, original_samples, energies_conditioned_across_timesteps, energies_composed_across_timesteps
+        Tuple[torch.Tensor, List[torch.Tensor], Dict[int, np.ndarray], Dict[int, List[np.ndarray]]]:
+        final_samples, unfiltered_samples, need_to_remove_across_timesteps, energies_across_timesteps
     """
-    assert all([algebra == "product" for algebra in algebras]), "only support product algebra for now, but got {}".format(algebras)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    datasets_across_timesteps = [diffusion_baseline(lambda x, t: condition_denoise_fn(x, t, use_cfg=True),
-                                                    noise_scheduler, x_shape,
-                                                    eval_batch_size=eval_batch_size)
-                                                    for condition_denoise_fn in conditions_denoise_fn]
 
     rejection_timesteps = create_intervene_timesteps(**rejection_scheduler_cfg, T=noise_scheduler.num_timesteps)
     if isinstance(noise_scheduler, ComposableDiff.composable_diffusion.respace.SpacedDiffusion):
@@ -351,80 +338,32 @@ def rejection_sampling_baseline_with_interval_calculation_elbo(composed_denoise_
     else:
         rejection_timesteps_unspaced = rejection_timesteps
 
-    estimate_neg_logp = make_estimate_neg_logp(elbo_cfg, noise_scheduler, unconditioned_denoise_fn, mini_batch)
+    estimate_neg_logp = make_estimate_neg_logp(elbo_cfg, noise_scheduler, unconditioned_denoise_fn)
 
-    # dataset_composed_origin = diffusion_baseline(composed_denoise_fn, noise_scheduler, x_shape, eval_batch_size=eval_batch_size)[-1]
-    intervals_across_timesteps = {}
-    energies_conditioned_across_timesteps = {}
-
-    for spaced_t, t in zip(rejection_timesteps, rejection_timesteps_unspaced):
-        intervals = []
-        energies = []
-        datasets_at_t = [dataset[::-1][spaced_t] for dataset in datasets_across_timesteps]
-
-        for dataset, condition_denoise_fn in zip(datasets_at_t, conditions_denoise_fn):
-            interval, energies_condition = calculate_interval(samples=dataset.to(device),
-                                                              denoise_fn=condition_denoise_fn,
-                                                              energy_fn=estimate_neg_logp,
-                                                              confidence=bootstrap_cfg["confidence"],
-                                                              bootstrap_method=bootstrap_cfg["method"],
-                                                              t=t,)
-            intervals.append(interval)
-            energies.append(energies_condition)
-
-        intervals_across_timesteps[spaced_t] = intervals
-        energies_conditioned_across_timesteps[spaced_t] = energies
-
-    filter_ratios = []
-    energies_composed_across_timesteps = {}
+    need_to_remove_across_timesteps = {}
+    energies_across_timesteps = {}
 
     def callback(x, t):
-        if len(t.unique()) == 1 and t[0] in rejection_timesteps:
-            intervals_at_t = intervals_across_timesteps[t[0].item()]
+        if t[0] in rejection_timesteps:
             unspaced_t = rejection_timesteps_unspaced[rejection_timesteps.index(t[0])]
             energies = [estimate_neg_logp(denoise_fn, x,
                                           t=torch.full((len(x),), unspaced_t, dtype=torch.long, device=x.device))
                                           for denoise_fn in conditions_denoise_fn]
-            energies_composed_across_timesteps[t[0].item()] = [e.cpu().numpy() for e in energies]
-            interval_mins = [interval[0] for interval in intervals_at_t]
-            interval_maxs = [interval[1] for interval in intervals_at_t]
-            if reject_using_interval:
-                out_of_interval = [((energy < interval_min) | (energy > interval_max)) for energy, interval_min, interval_max in zip(energies, interval_mins, interval_maxs)]
-            else:
-                out_of_interval = [(energy > interval_max) for energy, interval_min, interval_max in zip(energies, interval_mins, interval_maxs)]
-            need_to_remove = torch.any(torch.stack(out_of_interval), dim=0)
-            filter_ratios.append(need_to_remove.sum().item() / (len(x) + 1e-8))
-            # resampling
-            if need_to_remove.sum() != len(x):
-                if resample:
-                    x[need_to_remove] = x[~need_to_remove][torch.randint(0, torch.sum(~need_to_remove), (need_to_remove.sum(),))]
-                else:
-                    x = x[~need_to_remove]
-            else:
-                x = torch.empty((0, *x.shape[1:]), dtype=x.dtype, device=x.device)
-
-        elif len(t.unique()) == 0:
-            filter_ratios.append(1.0)
-            x = torch.empty((0, *x.shape[1:]), dtype=x.dtype, device=x.device)
+            energies_across_timesteps[t[0].item()] = [e.cpu().numpy() for e in energies]
+            need_to_remove = (torch.stack(energies, dim=0) > 0).any(dim=0)
+            need_to_remove_across_timesteps[t[0].item()] = need_to_remove.cpu().numpy()
 
         return x
-
-
-    final_samples = diffusion_baseline(composed_denoise_fn,
-                                       noise_scheduler,
-                                       x_shape,
-                                       eval_batch_size=eval_batch_size,
-                                       callback=callback)
 
     unfiltered_samples = diffusion_baseline(composed_denoise_fn,
                                             noise_scheduler,
                                             x_shape,
-                                            eval_batch_size=eval_batch_size,
-                                            callback=None)
+                                            eval_batch_size=num_samples_per_trial,
+                                            callback=callback,
+                                            progress=progress)
 
-    return final_samples, filter_ratios, intervals_across_timesteps, \
-           [dataset[-1] for dataset in datasets_across_timesteps], \
-            unfiltered_samples, energies_conditioned_across_timesteps, energies_composed_across_timesteps
+    need_to_remove = torch.from_numpy(np.array(list(need_to_remove_across_timesteps.values()))).any(dim=0)
+    return unfiltered_samples[-1][~need_to_remove], unfiltered_samples, need_to_remove_across_timesteps, energies_across_timesteps
 
 
 def best_of_n_sampling(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
@@ -457,7 +396,7 @@ def best_of_n_sampling(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
     """
     assert all([algebra == "product" for algebra in algebras]), "only support product algebra for now, but got {}".format(algebras)
 
-    estimate_neg_logp = make_estimate_neg_logp(elbo_cfg, noise_scheduler, unconditioned_denoise_fn, mini_batch)
+    estimate_neg_logp = make_estimate_neg_logp(elbo_cfg, noise_scheduler, unconditioned_denoise_fn)
 
     vote_timesteps = create_intervene_timesteps(**best_of_n_scheduler_cfg, T=noise_scheduler.num_timesteps)
     if isinstance(noise_scheduler, ComposableDiff.composable_diffusion.respace.SpacedDiffusion):

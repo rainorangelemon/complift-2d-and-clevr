@@ -13,30 +13,28 @@ batch_size: 32
 cfg_weight: 7.5
 # for evaluation
 max_samples_for_generation: 100
-mini_batch: 10
 
 # for rejection sampling
 rejection:
   eval_batch_size: 10
-  mini_batch: ${mini_batch}
-  reject_using_interval: false
 
 # for best_of_n sampling
 best_of_n:
   n: 10
-  mini_batch: ${mini_batch}
+  mini_batch: ${elbo.mini_batch}
 
 # for ELBO estimation
 elbo:
-  use_cfg: false  # better to use no cfg for ELBO
-  n_samples: 100
-  same_noise: false  # if true, sample the same epsilon for all (t, epsilon) pairs
-  sample_timesteps: interleave  # choose among {interleave, random}
+  use_cfg: true
+  n_samples: 1
+  same_noise: true  # if true, sample the same epsilon for all (t, epsilon) pairs
+  sample_timesteps: specified928  # choose among {interleave, random, specified{timesteps}}
+  mini_batch: 20
 
 # for rejection sampling
 rejection_scheduler:
   method: uniform
-  timesteps_to_select: 2
+  timesteps_to_select: 1
 
 # for best-of-n sampling
 best_of_n_scheduler:

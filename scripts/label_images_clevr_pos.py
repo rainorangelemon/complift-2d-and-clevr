@@ -231,7 +231,7 @@ def main(cfg: DictConfig):
         conditions_denoise_fn = conditions_denoise_fn_factory(labels)
 
         if cfg.method_name == "rejection":
-            method = baselines_clevr.rejection_sampling_baseline_with_interval_calculation_elbo
+            method = baselines_clevr.rejection_sampling_baseline
         elif cfg.method_name == "best_of_n":
             method = baselines_clevr.best_of_n_sampling
         elif cfg.method_name == "baseline":
