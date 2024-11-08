@@ -111,7 +111,7 @@ def main(cfg: DictConfig):
 
     packed_samples = th.zeros((5000, NUM_SAMPLES_PER_TRIAL, 3, 128, 128))
     packed_energies = th.zeros((5000, cfg.num_constraints, NUM_SAMPLES_PER_TRIAL))
-    for test_idx in tqdm(range(2)):
+    for test_idx in tqdm(range(5000)):
 
         th.manual_seed(0)
         th.cuda.manual_seed(0)

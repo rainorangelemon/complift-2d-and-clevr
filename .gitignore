@@ -9,6 +9,7 @@ wandb
 runs
 .vscode
 logs*
+ComposableDiff/output/
 __pycache__
 DiT
 __pycache__/
