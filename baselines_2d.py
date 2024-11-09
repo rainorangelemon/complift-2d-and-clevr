@@ -9,7 +9,7 @@ import torch
 from mcmc_yilun_torch import AnnealedMUHASampler
 import torch.distributions as dist
 import ot
-from typing import Tuple, List
+from typing import Tuple, List, Callable, Dict
 from r_and_r import (
 intermediate_distribution,
 calculate_interval,
@@ -21,26 +21,27 @@ calculate_elbo
 )
 from utils import plot_two_intervals
 
-def diffusion_baseline(model_to_test,
-                       num_timesteps=50,
-                       eval_batch_size=8000,
-                       callback=None):
-    dim = 2
+
+def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                       diffusion: ddpm.NoiseScheduler,
+                       x_shape: Tuple[int, ...] = (2,),
+                       eval_batch_size: int=8000,
+                       progress: bool = True,
+                       callback: Union[None, Callable[[torch.Tensor, int], torch.Tensor]]=None) -> List[np.ndarray]:
     device = ddpm.device
-    model_to_test = model_to_test.to(device)
-    noise_scheduler = ddpm.NoiseScheduler(num_timesteps=num_timesteps)
-    sample = torch.randn(eval_batch_size, dim).to(device)
-    timesteps = list(range(num_timesteps))[::-1]
+    denoise_fn = denoise_fn.to(device)
+    sample = torch.randn((eval_batch_size,) + x_shape).to(device)
+    timesteps = list(range(diffusion.num_timesteps))[::-1]
 
     samples = []
     for i, t in enumerate(tqdm(timesteps)):
         if len(sample) != 0:
             t_tensor = torch.from_numpy(np.repeat(t, len(sample))).long().to(device)
             with torch.no_grad():
-                residual = model_to_test(sample, t_tensor)
-            sample = noise_scheduler.step(residual, t_tensor[0], sample)
+                residual = denoise_fn(sample, t_tensor)
+            sample = diffusion.step(residual, t_tensor[0], sample)
             if callback is not None:
-                sample = callback(sample, t)
+                sample = callback(sample, t_tensor)
         samples.append(sample.cpu().numpy())
     return samples
 
@@ -95,170 +96,108 @@ def ebm_baseline(model_to_test,
     return total_samples.cpu().numpy()
 
 
-def ebm_rejection_baseline(composed_model,
-                           models,
-                           intervals,
-                           algebra,
-                           **kwargs):
-
-    assert len(models) == 2
-    assert algebra in ['product', 'summation', 'negation']
-    device = ddpm.device
-    num_timesteps = kwargs.get('num_timesteps', 50)
-    filter_ratios = []
-
-    def callback(x, reverse_t):
-        t = num_timesteps - 1 - reverse_t
-        if isinstance(x, torch.Tensor):
-            x_numpy = x.cpu().numpy()
-        x = torch.from_numpy(x_numpy).float().to(device)
-        t_tensor = torch.from_numpy(np.repeat(t, len(x))).long().to(device)
-        energies = [model.energy(x, t_tensor) for model in models]
-        interval_mins = [interval[reverse_t][0] for interval in intervals]
-        interval_maxs = [interval[reverse_t][1] for interval in intervals]
-        out_of_interval = [((energy < interval_min) | (energy > interval_max)) for energy, interval_min, interval_max in zip(energies, interval_mins, interval_maxs)]
-        if algebra == 'product':
-            need_to_remove = out_of_interval[0] | out_of_interval[1]
-        elif algebra == 'summation':
-            need_to_remove = out_of_interval[0] & out_of_interval[1]
-        elif algebra == 'negation':
-            need_to_remove = out_of_interval[0] | (~out_of_interval[1])
-        need_to_remove = need_to_remove.cpu().numpy()
-        filter_ratios.append(need_to_remove.sum() / len(x))
-        # repurpose
-        if need_to_remove.sum() != len(x):
-            x_numpy[need_to_remove] = x_numpy[~need_to_remove][np.random.choice(np.sum(~need_to_remove), need_to_remove.sum(), replace=True)]
-
-        return torch.from_numpy(x_numpy).float().to(device)
-
-    total_samples = ebm_baseline(composed_model, **kwargs, callback=callback)
-    return total_samples, filter_ratios
-
-
-def diffusion_rejection_baseline(composed_model,
-                                 models,
-                                 intervals,
-                                 algebra,
-                                 resample=True,
-                                 **kwargs):
-    assert len(models) == 2
-    assert algebra in ['product', 'summation', 'negation']
-    device = ddpm.device
-    num_timesteps = kwargs.get('num_timesteps', 50)
-    filter_ratios = []
-
-    def callback(x, t):
-        reverse_t = num_timesteps - 1 - t
-        if isinstance(x, torch.Tensor):
-            x_numpy = x.cpu().numpy()
-        x = torch.from_numpy(x_numpy).float().to(device)
-        t_tensor = torch.full((len(x),), t, dtype=torch.long, device=device)
-        energies = [model.energy(x, t_tensor) for model in models]
-        interval_mins = [interval[reverse_t][0] for interval in intervals]
-        interval_maxs = [interval[reverse_t][1] for interval in intervals]
-        out_of_interval = [((energy < interval_min) | (energy > interval_max)) for energy, interval_min, interval_max in zip(energies, interval_mins, interval_maxs)]
-        if algebra == 'product':
-            need_to_remove = out_of_interval[0] | out_of_interval[1]
-        elif algebra == 'summation':
-            need_to_remove = out_of_interval[0] & out_of_interval[1]
-        elif algebra == 'negation':
-            need_to_remove = out_of_interval[0] | (~out_of_interval[1])
-        need_to_remove = need_to_remove.cpu().numpy()
-        filter_ratios.append(need_to_remove.sum() / len(x))
-        # repurpose
-        if need_to_remove.sum() != len(x):
-            if resample:
-                x_numpy[need_to_remove] = x_numpy[~need_to_remove][np.random.choice(np.sum(~need_to_remove), need_to_remove.sum(), replace=True)]
-            else:
-                x_numpy = x_numpy[~need_to_remove]
-        else:
-            x_numpy = np.empty((0, x_numpy.shape[1]))
-
-        return torch.from_numpy(x_numpy).float().to(device)
-
-
-    total_samples = diffusion_baseline(composed_model, **kwargs, callback=callback)
-    return total_samples, filter_ratios
-
-
-def rejection_sampling_baseline_with_interval_calculation(model_to_test, model_1, model_2, algebra, eval_batch_size=8000
-                                                          ) -> Tuple[np.ndarray, List[float], Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]]:
-    dataset_1 = diffusion_baseline(model_1, eval_batch_size=eval_batch_size)[-1]
-    dataset_2 = diffusion_baseline(model_2, eval_batch_size=eval_batch_size)[-1]
-    dataset_3_origin = diffusion_baseline(model_to_test, eval_batch_size=eval_batch_size)[-1]
-
-    dataset_1 = torch.from_numpy(dataset_1).float().to(ddpm.device)
-    dataset_2 = torch.from_numpy(dataset_2).float().to(ddpm.device)
-    dataset_3_origin = torch.from_numpy(dataset_3_origin).float().to(ddpm.device)
-
-    interval_1, _ = calculate_interval(samples=dataset_1, denoise_fn=model_1, energy_fn=lambda model, x, t: model.energy(x, t))
-    interval_2, _ = calculate_interval(samples=dataset_2, denoise_fn=model_2, energy_fn=lambda model, x, t: model.energy(x, t))
-    energy_1 = calculate_energy(samples=dataset_3_origin, model=model_1)
-    energy_2 = calculate_energy(samples=dataset_3_origin, model=model_2)
-    need_to_remove = need_to_remove_with_thresholds(algebra=algebra,
-                                                    energy_1=energy_1, energy_2=energy_2,
-                                                    interval_1=interval_1, interval_2=interval_2)
-    dataset_3 = dataset_3_origin[~need_to_remove]
-
-    intervals_1 = calculate_interval_multiple_timesteps(samples=dataset_1, model=model_1)
-    if algebra=='negation':
-        intervals_2 = calculate_interval_to_avoid_multiple_timesteps(positive_samples=dataset_3, negative_samples=dataset_2, model=model_2)
-    else:
-        intervals_2 = calculate_interval_multiple_timesteps(samples=dataset_2, model=model_2)
-
-    result = diffusion_rejection_baseline(composed_model=model_to_test,
-                                          models=[model_1, model_2],
-                                          algebra=algebra,
-                                          intervals=[intervals_1, intervals_2],
-                                          eval_batch_size=eval_batch_size)
-    return *result, (intervals_1, intervals_2)
-
-
-def rejection_sampling_baseline_with_interval_calculation_elbo(model_to_test: ddpm.CompositionEnergyMLP,
-                                                               model_1: ddpm.EnergyMLP,
-                                                               model_2: ddpm.EnergyMLP,
-                                                               algebra: str,
-                                                               eval_batch_size=10000,
-                                                               n_sample_for_elbo=1,
-                                                               mini_batch=160000,
-                                                               num_timesteps=50,
-        ) -> Tuple[np.ndarray, List[float], Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]]:
-    """similar to rejection_sampling_baseline_with_interval_calculation, but using elbo to estimate the -log p instead of energy
+def make_estimate_log_lift(elbo_cfg: dict[str, Union[bool, str]],
+                           noise_scheduler: ddpm.NoiseScheduler,
+                           progress: bool=False) -> Callable[[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], torch.Tensor, torch.Tensor], torch.Tensor]:
+    """Creates a function to estimate the log of lift
 
     Args:
-        model_to_test (ddpm.CompositionEnergyMLP): the composed model
-        model_1 (ddpm.EnergyMLP): model for algebra 1
-        model_2 (ddpm.EnergyMLP): model for algebra 2
-        algebra (str): type of the algebra, one of ["product", "summation", "negation"]
-        eval_batch_size (int, optional): Number of samples to
-                                         (1) calculate the support interval,
-                                         (2) generate the samples.
-        n_sample_for_elbo (int, optional): Number of (t, epsilon) pairs to estimate ELBO.
-        mini_batch (int, optional): mini batch size for elbo estimation.
-        num_timesteps (int, optional): number of timesteps for the diffusion model.
+        elbo_cfg (dict[str, Union[bool, str]]): Configuration for ELBO estimation, including number of samples, mini batch size, etc.
+        noise_scheduler (ddpm.NoiseScheduler): Noise scheduler.
+        progress (bool, optional): Whether to show the progress bar. Defaults to False.
 
     Returns:
-        Tuple[np.ndarray, List[float], Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]]: samples, filter_ratios, intervals
+        Callable[[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], torch.Tensor, torch.Tensor], torch.Tensor]: Function to estimate the negative log probability.
     """
-    # overwrite model_to_test.energy to use elbo
-    def estimate_neg_logp(model: Union[ddpm.EnergyMLP, ddpm.CompositionEnergyMLP],
-                          x: torch.Tensor,
-                          t: torch.Tensor):
+    def estimate_log_lift(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                            x: torch.Tensor,
+                            t: torch.Tensor) -> torch.Tensor:
         if x.shape[0] == 0:
             return torch.zeros((0,), dtype=x.dtype, device=x.device)
-        assert len(t.unique())==1, "t should be the same for all samples, but got {}".format(t.unique())
-        noise_scheduler = ddpm.NoiseScheduler(num_timesteps=num_timesteps)
-        return -calculate_elbo(model, noise_scheduler, x_t=x, t=t[0], n_samples=n_sample_for_elbo, seed=t[0], mini_batch=mini_batch)
+        assert len(t.unique()) == 1, "t should be the same for all samples, but got {}".format(t.unique())
+        log_px_given_c = calculate_elbo(denoise_fn,
+                                        noise_scheduler,
+                                        x_t=x,
+                                        t=t[0],
+                                        seed=t[0],
+                                        mini_batch=elbo_cfg["mini_batch"],
+                                        n_samples=elbo_cfg["n_samples"],
+                                        same_noise=elbo_cfg["same_noise"],
+                                        sample_timesteps=elbo_cfg["sample_timesteps"],
+                                        progress=progress)
+        log_px = calculate_elbo(lambda x, t: elbo_cfg["alpha"] * denoise_fn(x, t),
+                                noise_scheduler,
+                                x_t=x,
+                                t=t[0],
+                                seed=t[0],
+                                mini_batch=elbo_cfg["mini_batch"],
+                                n_samples=elbo_cfg["n_samples"],
+                                same_noise=elbo_cfg["same_noise"],
+                                sample_timesteps=elbo_cfg["sample_timesteps"],
+                                progress=progress)
+        log_lift = log_px_given_c - log_px
+        return log_lift
+    return estimate_log_lift
 
-    # deepcopy to avoid modifying the original model
-    model_to_test = deepcopy(model_to_test)
-    model_1 = deepcopy(model_1)
-    model_2 = deepcopy(model_2)
 
-    model_to_test.energy = types.MethodType(estimate_neg_logp, model_to_test)
-    model_1.energy = types.MethodType(estimate_neg_logp, model_1)
-    model_2.energy = types.MethodType(estimate_neg_logp, model_2)
-    return rejection_sampling_baseline_with_interval_calculation(model_to_test, model_1, model_2, algebra, eval_batch_size)
+def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                                conditions_denoise_fn: List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
+                                algebras: list[str],
+                                x_shape: Tuple[int, ...],
+                                noise_scheduler: ddpm.NoiseScheduler,
+                                num_samples_per_trial: int,
+                                elbo_cfg: dict[str, Union[bool, str]],
+                                progress: bool,
+        ) -> Tuple[torch.Tensor, List[torch.Tensor], Dict[int, np.ndarray], Dict[int, List[np.ndarray]]]:
+    """rejection sampling baseline
+
+    Args:
+        composed_denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): denoising function for the composed model
+        conditions_denoise_fn (List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]]): denoising function for multiple conditions
+        algebras (list[str]): algebra to combine the conditions
+        x_shape (Tuple[int, ...]): shape of each sample
+        noise_scheduler (ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion, optional): noise scheduler. Defaults to None.
+        num_samples_per_trial (int, optional): number of samples to generate for each trial.
+        elbo_cfg (dict[str, Union[bool, str]]): configuration for the elbo estimation
+        progress (bool): whether to show the progress bar
+
+    Returns:
+        Tuple[torch.Tensor, List[torch.Tensor], Dict[int, np.ndarray], Dict[int, List[np.ndarray]]]:
+        final_samples, unfiltered_samples, need_to_remove_across_timesteps, energies_across_timesteps
+    """
+    assert all([algebra in ['product', 'summation', 'negation'] for algebra in algebras])
+
+    estimate_log_lift = make_estimate_log_lift(elbo_cfg, noise_scheduler)
+
+    energies_across_timesteps = {}
+    unfiltered_samples = []
+
+    def callback(x, t):
+        unfiltered_samples.append(x.clone().cpu().numpy())
+        if t[0] == 0:
+            energies = [estimate_log_lift(denoise_fn, x, t) for denoise_fn in conditions_denoise_fn]
+            energies_across_timesteps[t[0].item()] = [e.cpu().numpy() for e in energies]
+            is_valid = torch.ones(len(x), dtype=torch.bool, device=x.device)
+            for algebra_idx, algebra in enumerate(algebras):
+                if algebra == "negation":
+                    is_valid = is_valid & (energies[algebra_idx] <= 0)
+                elif algebra == "product":
+                    is_valid = is_valid & (energies[algebra_idx] > 0)
+                elif algebra == "summation":
+                    is_valid = is_valid | (energies[algebra_idx] > 0)
+            filtered_x = x[is_valid]
+        else:
+            filtered_x = x
+        return filtered_x
+
+    samples = diffusion_baseline(composed_denoise_fn,
+                                 noise_scheduler,
+                                 x_shape,
+                                 eval_batch_size=num_samples_per_trial,
+                                 callback=callback,
+                                 progress=progress)
+
+    return samples, unfiltered_samples, len(samples[-1]) / len(unfiltered_samples[-1]), energies_across_timesteps
 
 
 def evaluate_W1(generated_samples, target_samples):

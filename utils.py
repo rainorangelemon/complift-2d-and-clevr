@@ -17,11 +17,16 @@ def plot_points(points: np.ndarray) -> np.ndarray:
     """
     plt.clf()
     plt.close("all")
-    fig, ax = plt.subplots()
-    ax.plot(points[:, 0], points[:, 1], 'o')
-    ax.set_xlim(-2, 2)
-    ax.set_ylim(-2, 2)
-    ax.set_aspect('equal')
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(points[:, 0], points[:, 1], 'o', alpha=0.3)
+    ax.set_xlim(-1.7, 1.7)
+    ax.set_ylim(-1.7, 1.7)
+
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.xaxis.set_ticks_position('none')
+    ax.yaxis.set_ticks_position('none')
+    plt.tight_layout()
 
     buf = io.BytesIO()
     plt.savefig(buf, format='png')

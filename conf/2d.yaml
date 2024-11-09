@@ -1,0 +1,18 @@
+defaults:
+  - _self_
+
+experiment_name: 2d
+output_dir: runs/${now:%m-%d_%H-%M-%S}_${experiment_name}
+
+# for ELBO estimation
+elbo:
+  alpha: 0.9
+  n_samples: 1000
+  same_noise: false  # if true, sample the same epsilon for all (t, epsilon) pairs
+  sample_timesteps: random  # choose among {interleave, random, specified{timesteps}}
+  mini_batch: 100000
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

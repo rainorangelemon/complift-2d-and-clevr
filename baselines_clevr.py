@@ -55,9 +55,6 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
     indices = list(range(diffusion.num_timesteps))[::-1]
 
     if progress:
-        # Lazy import so that we don't depend on tqdm.
-        from tqdm.auto import tqdm
-
         indices = tqdm(indices)
 
     samples = [sample.cpu()]
