@@ -6,10 +6,10 @@ from typing import Union
 
 import ddpm
 import torch
-from mcmc_yilun_torch import AnnealedMUHASampler
+from mcmc_yilun_torch import AnnealedMUHASampler, AnnealedULASampler, AnnealedUHASampler, AnnealedMALASampler
 import torch.distributions as dist
 import ot
-from typing import Tuple, List, Callable, Dict
+from typing import Tuple, List, Callable, Dict, Optional
 from r_and_r import (
 intermediate_distribution,
 calculate_interval,
@@ -28,6 +28,20 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
                        eval_batch_size: int=8000,
                        progress: bool = True,
                        callback: Union[None, Callable[[torch.Tensor, int], torch.Tensor]]=None) -> List[np.ndarray]:
+    """
+    Diffusion baseline
+
+    Args:
+        denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): The denoising function to test
+        diffusion (ddpm.NoiseScheduler): The noise scheduler
+        x_shape (Tuple[int, ...], optional): Shape of each sample. Defaults to (2,).
+        eval_batch_size (int, optional): Batch size for evaluation. Defaults to 8000.
+        progress (bool, optional): Whether to show the progress bar. Defaults to True.
+        callback (Union[None, Callable[[torch.Tensor, int], torch.Tensor]], optional): Optional callback function. Defaults to None.
+
+    Returns:
+        List[np.ndarray]: List of samples
+    """
     device = ddpm.device
     denoise_fn = denoise_fn.to(device)
     sample = torch.randn((eval_batch_size,) + x_shape).to(device)
@@ -46,52 +60,108 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
     return samples
 
 
-def ebm_baseline(model_to_test,
-                 num_timesteps=50,
-                 eval_batch_size=8000,
-                 temperature=1,
-                 samples_per_step=10,
-                 callback=None):
+def ebm_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                 diffusion: ddpm.NoiseScheduler,
+                 sampler_type: str = "MALA",  # Can be "ULA", "UHA", "MALA", or "MUHA"
+                 eval_batch_size: int = 8000,
+                 callback: Optional[Callable[[torch.Tensor, int], torch.Tensor]] = None,
+                 **sampler_kwargs: dict) -> np.ndarray:
+    """
+    Enhanced EBM baseline supporting multiple samplers.
 
-    noise_scheduler = ddpm.NoiseScheduler(num_timesteps=num_timesteps)
+    Args:
+        denoise_fn: The denoising function to test
+        diffusion: The noise scheduler
+        sampler_type: String indicating which sampler to use ("ULA", "UHA", "MALA", or "MUHA")
+        eval_batch_size: Batch size for evaluation
+        callback: Optional callback function
+        sampler_kwargs: Additional kwargs to override default sampler parameters
+    """
     device = ddpm.device
-    model_to_test = model_to_test.to(device)
+    denoise_fn = denoise_fn.to(device)
 
-    num_steps = 50
-    dim = 2
-    init_std = 1.
-    init_mu = 0.
-    damping = .5
-    mass_diag_sqrt = 1.
-    num_leapfrog = 3
-    uha_step_size = .03
-    uha_step_sizes = torch.ones((num_steps,)) * uha_step_size
+    # Default parameters for all samplers
+    default_params = {
+        "num_steps": 50,
+        "dim": 2,
+        "init_std": 1.,
+        "init_mu": 0.,
+        # Parameters for UHA and MUHA
+        "damping": 0.5,
+        "mass_diag_sqrt": 1.,
+        "num_leapfrog": 3,
+        # Step sizes for different samplers
+        "ula_step_size": 0.001,
+        "uha_step_size": 0.03,
+        "mala_step_size": 0.03,
+        "muha_step_size": 0.03,
+        "samples_per_step": 10,
+        "temperature": 1,
+    }
 
-    initial_distribution = dist.MultivariateNormal(loc=torch.zeros(dim).to(device) + init_mu, covariance_matrix=torch.eye(dim).to(device) * init_std)
+    # Update parameters with any provided overrides
+    params = {**default_params, **sampler_kwargs}
+
+    # Set up initial distribution
+    initial_distribution = dist.MultivariateNormal(
+        loc=torch.zeros(params["dim"]).to(device) + params["init_mu"],
+        covariance_matrix=torch.eye(params["dim"]).to(device) * params["init_std"]
+    )
 
     def energy_function(x, t):
-        t = num_steps - 1 - t
+        # t = params["num_steps"] - 1 - t
+        t = 0
         x = x.clone().to(device)
         t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
-        return -(model_to_test.energy(x, t_tensor)) * temperature / noise_scheduler.sqrt_one_minus_alphas_cumprod[t]
+        return -(denoise_fn.energy(x, t_tensor)) * params["temperature"] / diffusion.sqrt_one_minus_alphas_cumprod[t]
 
     def gradient_function(x, t):
-        t = num_steps - 1 - t
+        # t = params["num_steps"] - 1 - t
+        t = 0
         x = x.clone().to(device)
         t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
-        return -(model_to_test(x, t_tensor)) * temperature / noise_scheduler.sqrt_one_minus_alphas_cumprod[t]
+        return -(denoise_fn(x, t_tensor)) * params["temperature"] / diffusion.sqrt_one_minus_alphas_cumprod[t]
 
-    # Create an instance of the AnnealedMUHASampler
-    sampler = AnnealedMUHASampler(num_steps=num_steps,
-                                num_samples_per_step=samples_per_step,
-                                step_sizes=uha_step_sizes,
-                                damping_coeff=damping,
-                                mass_diag_sqrt=mass_diag_sqrt,
-                                num_leapfrog_steps=num_leapfrog,
-                                initial_distribution=initial_distribution,
-                                gradient_function=gradient_function,
-                                energy_function=energy_function,)
+    # Configure step sizes based on sampler type
+    step_size = {
+        "ULA": params["ula_step_size"],
+        "UHA": params["uha_step_size"],
+        "MALA": params["mala_step_size"],
+        "MUHA": params["muha_step_size"]
+    }[sampler_type]
 
+    step_sizes = torch.ones((params["num_steps"],)).to(device) * step_size
+
+    # Create the appropriate sampler based on type
+    sampler_class = {
+        "ULA": AnnealedULASampler,
+        "UHA": AnnealedUHASampler,
+        "MALA": AnnealedMALASampler,
+        "MUHA": AnnealedMUHASampler
+    }[sampler_type]
+
+    # Base parameters for all samplers
+    sampler_base_params = {
+        "num_steps": params["num_steps"],
+        "num_samples_per_step": params["samples_per_step"],
+        "step_sizes": step_sizes,
+        "initial_distribution": initial_distribution,
+        "gradient_function": gradient_function,
+        "energy_function": energy_function,
+    }
+
+    # Add additional parameters for UHA and MUHA
+    if sampler_type in ["UHA", "MUHA"]:
+        sampler_base_params.update({
+            "damping_coeff": params["damping"],
+            "mass_diag_sqrt": params["mass_diag_sqrt"],
+            "num_leapfrog_steps": params["num_leapfrog"],
+        })
+
+    # Create sampler instance
+    sampler = sampler_class(**sampler_base_params)
+
+    # Run sampling
     total_samples, _, _, _ = sampler.sample(n_samples=eval_batch_size, callback=callback)
     return total_samples.cpu().numpy()
 

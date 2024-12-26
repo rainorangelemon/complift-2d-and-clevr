@@ -6,6 +6,7 @@ wandb
 *.gif
 *.txt
 *.tar
+*.log
 runs
 .vscode
 logs*

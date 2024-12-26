@@ -107,7 +107,7 @@ def main(cfg: DictConfig):
                config=OmegaConf.to_container(cfg, resolve=True),
                name=f"{cfg.experiment_name}",)
 
-    NUM_SAMPLES_PER_TRIAL = 10
+    NUM_SAMPLES_PER_TRIAL = cfg.rejection.num_samples_per_trial
 
     packed_samples = th.zeros((5000, NUM_SAMPLES_PER_TRIAL, 3, 128, 128))
     packed_energies = th.zeros((5000, cfg.num_constraints, NUM_SAMPLES_PER_TRIAL))
@@ -140,7 +140,7 @@ def main(cfg: DictConfig):
             sample_at_final_t = filtered_samples[np.random.randint(len(filtered_samples))]
         else:
             # choose the one with minimum energy
-            score = packed_energies[test_idx].sum(dim=-1)
+            score = packed_energies[test_idx].sum(dim=0)
             sample_at_final_t = unfiltered_samples_over_time[-1][score.argmin()]
 
         sample_at_final_t = (sample_at_final_t + 1) / 2
