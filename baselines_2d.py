@@ -6,7 +6,6 @@ from typing import Union
 
 import ddpm
 import torch
-from mcmc_yilun_torch import AnnealedMUHASampler, AnnealedULASampler, AnnealedUHASampler, AnnealedMALASampler
 import torch.distributions as dist
 import ot
 from typing import Tuple, List, Callable, Dict, Optional
@@ -20,6 +19,8 @@ calculate_interval_to_avoid_multiple_timesteps,
 calculate_elbo
 )
 from utils import plot_two_intervals
+# from simple_distributions_debugged import get_composition_samples
+import pickle
 
 
 def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
@@ -60,110 +61,34 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
     return samples
 
 
-def ebm_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-                 diffusion: ddpm.NoiseScheduler,
-                 sampler_type: str = "MALA",  # Can be "ULA", "UHA", "MALA", or "MUHA"
-                 eval_batch_size: int = 8000,
-                 callback: Optional[Callable[[torch.Tensor, int], torch.Tensor]] = None,
-                 **sampler_kwargs: dict) -> np.ndarray:
+def ebm_baseline(algebra: str,
+                 suffix1: str,
+                 suffix2: str,
+                 sampler_type: str = "MUHA",  # Can be "ULA", "UHA", "MALA", or "MUHA"
+                 eval_batch_size: int = 8000) -> np.ndarray:
     """
     Enhanced EBM baseline supporting multiple samplers.
 
     Args:
-        denoise_fn: The denoising function to test
-        diffusion: The noise scheduler
+        algebra: String indicating which algebra to use
+        suffix1: String indicating the suffix of the first model
+        suffix2: String indicating the suffix of the second model
         sampler_type: String indicating which sampler to use ("ULA", "UHA", "MALA", or "MUHA")
         eval_batch_size: Batch size for evaluation
-        callback: Optional callback function
-        sampler_kwargs: Additional kwargs to override default sampler parameters
     """
-    device = ddpm.device
-    denoise_fn = denoise_fn.to(device)
-
-    # Default parameters for all samplers
-    default_params = {
-        "num_steps": 50,
-        "dim": 2,
-        "init_std": 1.,
-        "init_mu": 0.,
-        # Parameters for UHA and MUHA
-        "damping": 0.5,
-        "mass_diag_sqrt": 1.,
-        "num_leapfrog": 3,
-        # Step sizes for different samplers
-        "ula_step_size": 0.001,
-        "uha_step_size": 0.03,
-        "mala_step_size": 0.03,
-        "muha_step_size": 0.03,
-        "samples_per_step": 10,
-        "temperature": 1,
-    }
-
-    # Update parameters with any provided overrides
-    params = {**default_params, **sampler_kwargs}
-
-    # Set up initial distribution
-    initial_distribution = dist.MultivariateNormal(
-        loc=torch.zeros(params["dim"]).to(device) + params["init_mu"],
-        covariance_matrix=torch.eye(params["dim"]).to(device) * params["init_std"]
-    )
-
-    def energy_function(x, t):
-        # t = params["num_steps"] - 1 - t
-        t = 0
-        x = x.clone().to(device)
-        t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
-        return -(denoise_fn.energy(x, t_tensor)) * params["temperature"] / diffusion.sqrt_one_minus_alphas_cumprod[t]
-
-    def gradient_function(x, t):
-        # t = params["num_steps"] - 1 - t
-        t = 0
-        x = x.clone().to(device)
-        t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
-        return -(denoise_fn(x, t_tensor)) * params["temperature"] / diffusion.sqrt_one_minus_alphas_cumprod[t]
-
-    # Configure step sizes based on sampler type
-    step_size = {
-        "ULA": params["ula_step_size"],
-        "UHA": params["uha_step_size"],
-        "MALA": params["mala_step_size"],
-        "MUHA": params["muha_step_size"]
-    }[sampler_type]
-
-    step_sizes = torch.ones((params["num_steps"],)).to(device) * step_size
-
-    # Create the appropriate sampler based on type
-    sampler_class = {
-        "ULA": AnnealedULASampler,
-        "UHA": AnnealedUHASampler,
-        "MALA": AnnealedMALASampler,
-        "MUHA": AnnealedMUHASampler
-    }[sampler_type]
-
-    # Base parameters for all samplers
-    sampler_base_params = {
-        "num_steps": params["num_steps"],
-        "num_samples_per_step": params["samples_per_step"],
-        "step_sizes": step_sizes,
-        "initial_distribution": initial_distribution,
-        "gradient_function": gradient_function,
-        "energy_function": energy_function,
-    }
-
-    # Add additional parameters for UHA and MUHA
-    if sampler_type in ["UHA", "MUHA"]:
-        sampler_base_params.update({
-            "damping_coeff": params["damping"],
-            "mass_diag_sqrt": params["mass_diag_sqrt"],
-            "num_leapfrog_steps": params["num_leapfrog"],
-        })
-
-    # Create sampler instance
-    sampler = sampler_class(**sampler_base_params)
-
-    # Run sampling
-    total_samples, _, _, _ = sampler.sample(n_samples=eval_batch_size, callback=callback)
-    return total_samples.cpu().numpy()
+    from mcmc import get_composition_samples
+    params1 = pickle.load(open(f'exps/{algebra}_{suffix1}/ema_model.pkl', 'rb'))
+    params2 = pickle.load(open(f'exps/{algebra}_{suffix2}/ema_model.pkl', 'rb'))
+    params = {}
+    for k, v in params1.items():
+        params[k] = v
+    for k, v in params2.items():
+        k = k.replace('resnet_diffusion_model/', 'resnet_diffusion_model_1/')
+        params[k] = v
+    x_samp = get_composition_samples(params, sampler_type, algebra,
+                                     batch_size=eval_batch_size,
+                                     get_grad_samples=False)
+    return np.array(x_samp)
 
 
 def make_estimate_log_lift(elbo_cfg: dict[str, Union[bool, str]],

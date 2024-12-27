@@ -9,7 +9,6 @@ import ComposableDiff.composable_diffusion.gaussian_diffusion
 import ComposableDiff.composable_diffusion.respace
 import ddpm
 import torch
-from mcmc_yilun_torch import AnnealedMUHASampler
 import torch.distributions as dist
 import ot
 from typing import Tuple, List, Dict

@@ -155,18 +155,21 @@ def composition_summation_a1_dataset(n=8000):
     left_centers = [[-0.25, 0.5], [-0.25, 0.], [-0.25, -0.5]]
     n_samples_per_center = n // len(left_centers)
     X = gaussian_from_centers(left_centers, n_samples_per_center)
+    X.tensors = (torch.cat((X.tensors[0], X.tensors[0][:n-X.tensors[0].shape[0]]), dim=0),)
     return X
 
 def composition_summation_a2_dataset(n=8000):
     right_centers = [[0.25, 0.5], [0.25, 0.], [0.25, -0.5]]
     n_samples_per_center = n // len(right_centers)
     X = gaussian_from_centers(right_centers, n_samples_per_center)
+    X.tensors = (torch.cat((X.tensors[0], X.tensors[0][:n-X.tensors[0].shape[0]]), dim=0),)
     return X
 
 def composition_summation_a3_dataset(n=8000):
     centers = [[-0.25, 0.5], [-0.25, 0.], [-0.25, -0.5], [0.25, 0.5], [0.25, 0.], [0.25, -0.5]]
     n_samples_per_center = n // len(centers)
     X = gaussian_from_centers(centers, n_samples_per_center)
+    X.tensors = (torch.cat((X.tensors[0], X.tensors[0][:n-X.tensors[0].shape[0]]), dim=0),)
     return X
 
 def accuracy_summation_a3(x, intendended_size):

@@ -14,6 +14,20 @@ import wandb
 import numpy as np
 import hydra
 from omegaconf import DictConfig
+from collections import defaultdict
+import pandas as pd
+
+# Helper function to create multiple rows in a dataframe
+def create_metric_row(algebra, metrics_dict, methods):
+    # columns: algebra, method, metric1_value, metric2_value, ...
+    sub_df = pd.DataFrame()
+    for method in methods:
+        sub_df = pd.concat([sub_df, pd.DataFrame([{
+            "algebra": algebra,
+            "method": method,
+            **{metric_name: np.mean(metric_values[f"{algebra}", method]) for metric_name, metric_values in metrics_dict.items()}
+        }])], ignore_index=True)
+    return sub_df
 
 
 @torch.no_grad()
@@ -23,21 +37,20 @@ def main(cfg: DictConfig):
     wandb.init(project="r_and_r", name="synthetic data 2d")
     wandb.run.log_code(".")
 
+    # Initialize pandas dataframe
+    df = pd.DataFrame()
+
     # Load the models
     model_1 = ddpm.EnergyMLP()
     model_2 = ddpm.EnergyMLP()
     for algebra in ['product', 'summation', 'negation']:
-        accs_diffusion = []
-        accs_rejection = []
-        accs_ebm = []
-        chamfer_dists_diffusion = []
-        chamfer_dists_rejection = []
-        chamfer_dists_ebm = []
-        NLLs_diffusion = []
-        NLLs_rejection = []
-        NLLs_ebm = []
+        accs = defaultdict(list)
+        chamfer_dists = defaultdict(list)
+        NLLs = defaultdict(list)
 
         for suffix in ['a', 'b', 'c']:
+            generated_samples = dict()
+
             environment = algebra + '_' + suffix + '3'
             model_1.load_state_dict(torch.load(f"exps/{algebra}_{suffix}1/ema_model.pth", weights_only=True))
             model_2.load_state_dict(torch.load(f"exps/{algebra}_{suffix}2/ema_model.pth", weights_only=True))
@@ -45,93 +58,88 @@ def main(cfg: DictConfig):
             with catchtime('diffusion'):
                 generated_samples_diffusion = diffusion_baseline(model_to_test, diffusion=ddpm.NoiseScheduler(num_timesteps=50))
                 generated_samples_diffusion = generated_samples_diffusion[-1]
+                generated_samples['diffusion'] = generated_samples_diffusion
+
             with catchtime('rejection'):
                 generated_samples_rejection, _, acceptance_ratio, _ = rejection_baseline(composed_denoise_fn=model_to_test,
-                                                                                                    conditions_denoise_fn=[model_1, model_2],
-                                                                                                    # the first algebra needs to be product, see implementation of rejection_baseline
-                                                                                                    algebras=["product", algebra],
-                                                                                                    x_shape=(2,),
-                                                                                                    noise_scheduler=ddpm.NoiseScheduler(num_timesteps=50),
-                                                                                                    num_samples_per_trial=8000,
-                                                                                                    elbo_cfg=cfg.elbo,
-                                                                                                    progress=True)
+                                                                                         conditions_denoise_fn=[model_1, model_2],
+                                                                                         # the first algebra needs to be product, see implementation of rejection_baseline
+                                                                                         algebras=["product", algebra],
+                                                                                         x_shape=(2,),
+                                                                                         noise_scheduler=ddpm.NoiseScheduler(num_timesteps=50),
+                                                                                         num_samples_per_trial=8000,
+                                                                                         elbo_cfg=cfg.elbo,
+                                                                                         progress=True)
                 generated_samples_rejection = generated_samples_rejection[-1]
+                generated_samples['rejection'] = generated_samples_rejection
 
-            with catchtime('ebm'):
-                generated_samples_ebm = ebm_baseline(denoise_fn=model_to_test,
-                                                     diffusion=ddpm.NoiseScheduler(num_timesteps=50),
-                                                     eval_batch_size=8000,)
-                generated_samples_ebm = generated_samples_ebm[-1]
+            for sampler_type in ["ULA", "UHA", "MALA", "MUHA"]:
+                with catchtime(f'ebm_{sampler_type}'):
+                    generated_samples_ebm = ebm_baseline(algebra=algebra,
+                                                         suffix1=suffix + '1',
+                                                         suffix2=suffix + '2',
+                                                         eval_batch_size=8000,
+                                                         sampler_type=sampler_type)
+                    generated_samples[f'ebm_{sampler_type}'] = generated_samples_ebm
 
             dataset_1 = generate_data_points(n=8000, dataset=f"{algebra}_{suffix}1")
             dataset_2 = generate_data_points(n=8000, dataset=f"{algebra}_{suffix}2")
             dataset_composed = generate_data_points(n=8000, dataset=environment)
 
-            acc_diffusion = get_accuracy(generated_samples_diffusion, environment, 8000)
-            acc_rejection = get_accuracy(generated_samples_rejection, environment, 8000)
-            acc_ebm = get_accuracy(generated_samples_ebm, environment, 8000)
-
-            accs_diffusion.append(acc_diffusion)
-            accs_rejection.append(acc_rejection)
-            accs_ebm.append(acc_ebm)
+            for method in generated_samples:
+                acc_method = get_accuracy(generated_samples[method], environment, 8000)
+                accs[f"{algebra}", method].append(acc_method)
 
             if len(dataset_composed):
-                chamfer_dist_diffusion = evaluate_chamfer_distance(generated_samples=generated_samples_diffusion, target_samples=dataset_composed)
-                chamfer_dist_rejection = evaluate_chamfer_distance(generated_samples=generated_samples_rejection, target_samples=dataset_composed)
-                chamfer_dist_ebm = evaluate_chamfer_distance(generated_samples=generated_samples_ebm, target_samples=dataset_composed)
+                for method in generated_samples:
+                    chamfer_dist_method = evaluate_chamfer_distance(generated_samples=generated_samples[method], target_samples=dataset_composed)
+                    chamfer_dists[f"{algebra}", method].append(chamfer_dist_method)
 
-                NLL_diffusion = model_to_test.energy(torch.tensor(generated_samples_diffusion, dtype=torch.float32, device='cuda'),
-                                                    t=torch.zeros((len(generated_samples_diffusion),), dtype=torch.long, device='cuda')).cpu().numpy().mean()
-                NLL_rejection = model_to_test.energy(torch.tensor(generated_samples_rejection, dtype=torch.float32, device='cuda'),
-                                                    t=torch.zeros((len(generated_samples_rejection),), dtype=torch.long, device='cuda')).cpu().numpy().mean()
-                NLL_ebm = model_to_test.energy(torch.tensor(generated_samples_ebm, dtype=torch.float32, device='cuda'),
-                                                    t=torch.zeros((len(generated_samples_ebm),), dtype=torch.long, device='cuda')).cpu().numpy().mean()
+                for method in generated_samples:
+                    NLL_method = model_to_test.energy(torch.tensor(generated_samples[method], dtype=torch.float32, device='cuda'),
+                                                    t=torch.zeros((len(generated_samples[method]),), dtype=torch.long, device='cuda')).cpu().numpy().mean()
+                    NLLs[f"{algebra}", method].append(NLL_method)
 
-                chamfer_dists_diffusion.append(chamfer_dist_diffusion)
-                chamfer_dists_rejection.append(chamfer_dist_rejection)
-                chamfer_dists_ebm.append(chamfer_dist_ebm)
-
-                NLLs_diffusion.append(NLL_diffusion)
-                NLLs_rejection.append(NLL_rejection)
-                NLLs_ebm.append(NLL_ebm)
-
-                wandb.log({
+                wandb.log({**{
                     f"{environment}/sample_1_gt": wandb.Image(plot_points(dataset_1)),
                     f"{environment}/sample_2_gt": wandb.Image(plot_points(dataset_2)),
                     f"{environment}/sample_composed_gt": wandb.Image(plot_points(dataset_composed),
-                                                                    caption=f"target samples at {environment}"),
-                    f"{environment}/baseline_diffusion": wandb.Image(plot_points(generated_samples_diffusion),
-                                                                    caption=f"diffusion samples at {environment}, chamfer distance: {chamfer_dist_diffusion:0.4f}, NLL: {NLL_diffusion:0.4f}, accuracy: {acc_diffusion:0.4f}"),
-                    f"{environment}/baseline_rejection": wandb.Image(plot_points(generated_samples_rejection),
-                                                                    caption=f"rejection samples at {environment}, chamfer distance: {chamfer_dist_rejection:0.4f}, NLL: {NLL_rejection:0.4f}, accuracy: {acc_rejection:0.4f}"),
-                    f"{environment}/baseline_ebm": wandb.Image(plot_points(generated_samples_ebm),
-                                                                    caption=f"ebm samples at {environment}, chamfer distance: {chamfer_dist_ebm:0.4f}, NLL: {NLL_ebm:0.4f}, accuracy: {acc_ebm:0.4f}"),
+                                                                    caption=f"target samples at {environment}"),},
+                    **{f"{environment}/baseline_{method}": wandb.Image(plot_points(generated_samples[method]),
+                                                                    caption=f"{method} samples at {environment}, chamfer distance: {chamfer_dists[f'{algebra}', method][-1]:0.4f}, NLL: {NLLs[f'{algebra}', method][-1]:0.4f}, accuracy: {accs[f'{algebra}', method][-1]:0.4f}")
+                                                           for method in generated_samples},
                     f"{environment}/acceptance_ratio": acceptance_ratio,
                 })
+
             else:
-                wandb.log({
+
+                # Log the target samples
+                wandb.log({**{
                     f"{environment}/sample_1_gt": wandb.Image(plot_points(dataset_1)),
                     f"{environment}/sample_2_gt": wandb.Image(plot_points(dataset_2)),
                     f"{environment}/sample_composed_gt": wandb.Image(plot_points(dataset_composed),
-                                                                    caption=f"target samples at {environment}"),
-                    f"{environment}/baseline_diffusion": wandb.Image(plot_points(generated_samples_diffusion),
-                                                                    caption=f"diffusion samples at {environment}, #samples: {len(generated_samples_diffusion)}, accuracy: {acc_diffusion:0.4f}"),
-                    f"{environment}/baseline_rejection": wandb.Image(plot_points(generated_samples_rejection),
-                                                                    caption=f"rejection samples at {environment}, #samples: {len(generated_samples_rejection)}, accuracy: {acc_rejection:0.4f}"),
-                    f"{environment}/baseline_ebm": wandb.Image(plot_points(generated_samples_ebm),
-                                                                    caption=f"ebm samples at {environment}, #samples: {len(generated_samples_ebm)}, accuracy: {acc_ebm:0.4f}"),
+                                                                    caption=f"target samples at {environment}"),},
+                    **{f"{environment}/baseline_{method}": wandb.Image(plot_points(generated_samples[method]),
+                                                                    caption=f"{method} samples at {environment}, #samples: {len(generated_samples[method])}, accuracy: {accs[f'{algebra}', method][-1]:0.4f}")
+                                                                    for method in generated_samples},
                     f"{environment}/acceptance_ratio": acceptance_ratio,
                 })
 
-        wandb.log({f"{algebra}/acc_diffusion": np.mean(accs_diffusion),
-                   f"{algebra}/acc_rejection": np.mean(accs_rejection),
-                   f"{algebra}/acc_ebm": np.mean(accs_ebm),
-                   f"{algebra}/chamfer_dist_diffusion": np.mean(chamfer_dists_diffusion),
-                   f"{algebra}/chamfer_dist_rejection": np.mean(chamfer_dists_rejection),
-                   f"{algebra}/chamfer_dist_ebm": np.mean(chamfer_dists_ebm),
-                   f"{algebra}/NLL_diffusion": np.mean(NLLs_diffusion),
-                   f"{algebra}/NLL_rejection": np.mean(NLLs_rejection),
-                   f"{algebra}/NLL_ebm": np.mean(NLLs_ebm)})
+        # Define methods and metrics
+        methods = generated_samples.keys()
+        metrics = {
+            "acc": accs,
+            "chamfer_dist": chamfer_dists,
+            "NLL": NLLs
+        }
+
+        # Combine all metrics into a single dictionary
+        log_table = create_metric_row(algebra, metrics, methods)
+        wandb.log({f"{algebra}": wandb.Table(dataframe=log_table)})
+        df = pd.concat([df, log_table], ignore_index=True)
+
+    df.to_csv("exps/baselines_2d.csv", index=False)
+    wandb.log({"overview": wandb.Table(dataframe=df)})
 
 if __name__ == "__main__":
     main()
