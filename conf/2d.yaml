@@ -7,10 +7,20 @@ output_dir: runs/${now:%m-%d_%H-%M-%S}_${experiment_name}
 # for ELBO estimation
 elbo:
   alpha: 0.9
-  n_samples: 1000
+  n_samples: 50
   same_noise: false  # if true, sample the same epsilon for all (t, epsilon) pairs
   sample_timesteps: random  # choose among {interleave, random, specified{timesteps}}
-  mini_batch: 100000
+  mini_batch: 200000
+
+ebm:
+  # here we use the default temperature without tuning
+  # for ebm-based methods, it might be better if the temperature is tuned
+  # however, in the paper, we use the default temperature
+  # for all methods as a fair comparison
+  temperature:
+    product: 1.0
+    mixture: 1.0
+    negation: [1.0, 0.5]
 
 hydra:
   run:

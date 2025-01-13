@@ -1,3 +1,5 @@
+# This file is refactored from the original notebook in https://github.com/yilundu/reduce_reuse_recycle/blob/main/notebooks/simple_distributions.ipynb
+
 import jax
 import jax.numpy as jnp
 import haiku as hk
@@ -128,15 +130,19 @@ class ProductEBMDiffusionModel(hk.Module):
   Add the energy value together
   """
 
-  def __init__(self, net, net2, name=None):
+  def __init__(self, net, net2, temperature=None, name=None):
     super().__init__(name=name)
     self.net = net
     self.net2 = net2
+    if temperature is None:
+        self.temperature = 1.0
+    else:
+        self.temperature = temperature
 
   def neg_logp_unnorm(self, x, t):
     unorm_1 = self.net.neg_logp_unnorm(x, t)
     unorm_2 = self.net2.neg_logp_unnorm(x, t)
-    return unorm_1 + unorm_2
+    return (unorm_1 + unorm_2) * self.temperature
 
   def __call__(self, x, t):
     score = (self.net(x, t) + self.net2(x, t))
@@ -149,16 +155,20 @@ class MixtureEBMDiffusionModel(hk.Module):
   Take the logsumexp of the energies
   """
 
-  def __init__(self, net, net2, name=None):
+  def __init__(self, net, net2, temperature=None, name=None):
     super().__init__(name=name)
     self.net = net
     self.net2 = net2
+    if temperature is None:
+        self.temperature = 1.0
+    else:
+        self.temperature = temperature
 
   def neg_logp_unnorm(self, x, t):
     unorm_1 = self.net.neg_logp_unnorm(x, t)
     unorm_2 = self.net2.neg_logp_unnorm(x, t)
     concat_energy = jnp.stack([unorm_1, unorm_2], axis=-1)
-    energy = -jax.scipy.special.logsumexp(-concat_energy, -1)
+    energy = -jax.scipy.special.logsumexp(-concat_energy * self.temperature, -1)
 
     return energy
 
@@ -172,15 +182,19 @@ class NegationEBMDiffusionModel(hk.Module):
   Negate one distribution
   """
 
-  def __init__(self, net, net2, name=None):
+  def __init__(self, net, net2, temperatures=None, name=None):
     super().__init__(name=name)
     self.net = net
     self.net2 = net2
+    if temperatures is None:
+        self.temperatures = [1.0, 1.0]
+    else:
+        self.temperatures = temperatures
 
   def neg_logp_unnorm(self, x, t):
     unorm_1 = self.net.neg_logp_unnorm(x, t)
     unorm_2 = self.net2.neg_logp_unnorm(x, t)
-    return unorm_1 - unorm_2
+    return unorm_1 * self.temperatures[0] - unorm_2 * self.temperatures[1]
 
   def __call__(self, x, t):
     neg_logp_unnorm = lambda _x: self.neg_logp_unnorm(_x, t).sum()
@@ -640,138 +654,87 @@ def train_ebm_model(dataset_sample, batch_size=1000, data_dim=2, num_steps=15001
     }
 
 """Define Jax operations for different model compositions"""
+def initialize_model_compositions(n_steps, data_dim, ebm=True, temperature_cfg=None):
+    """Initialize model composition operations for product, mixture, and negation.
 
-rng_seq = hk.PRNGSequence(0)
-seed = next(rng_seq)
+    Args:
+        n_steps: Number of diffusion steps
+        data_dim: Dimension of the data
+        ebm: Whether to use Energy-Based Model formulation (default: True)
 
-def forward_fn_product():
-  net_one = ResnetDiffusionModel(n_steps=n_steps, n_layers=4, x_dim=data_dim, h_dim=128, emb_dim=32)
+    Returns:
+        dict: Dictionary containing jitted functions for each composition type:
+            - product: {sample_fn, nll, logp_unnorm_fn, gradient_fn, energy_fn (if ebm)}
+            - mixture: {sample_fn, nll, logp_unnorm_fn, gradient_fn, energy_fn (if ebm)}
+            - negation: {sample_fn, nll, logp_unnorm_fn, gradient_fn, energy_fn (if ebm)}
+    """
+    rng_seq = hk.PRNGSequence(0)
+    seed = next(rng_seq)
+    if temperature_cfg is None:
+        temperature_cfg = {'product': 1.0, 'mixture': 1.0, 'negation': [1.0, 1.0]}
 
-  if ebm:
-    net_one = EBMDiffusionModel(net_one)
+    def create_forward_fn(composition_type):
+        def forward_fn():
+            # Create first network
+            net_one = ResnetDiffusionModel(n_steps=n_steps, n_layers=4, x_dim=data_dim, h_dim=128, emb_dim=32)
+            if ebm:
+                net_one = EBMDiffusionModel(net_one)
 
-  net_two = ResnetDiffusionModel(n_steps=n_steps, n_layers=4, x_dim=data_dim, h_dim=128, emb_dim=32)
+            # Create second network
+            net_two = ResnetDiffusionModel(n_steps=n_steps, n_layers=4, x_dim=data_dim, h_dim=128, emb_dim=32)
+            if ebm:
+                net_two = EBMDiffusionModel(net_two)
 
-  if ebm:
-    net_two = EBMDiffusionModel(net_two)
+            # Create composition network based on type
+            if composition_type == 'product':
+                dual_net = ProductEBMDiffusionModel(net_one, net_two, temperature=temperature_cfg['product'])
+            elif composition_type == 'mixture':
+                dual_net = MixtureEBMDiffusionModel(net_one, net_two, temperature=temperature_cfg['mixture'])
+            else:  # negation
+                dual_net = NegationEBMDiffusionModel(net_one, net_two, temperatures=temperature_cfg['negation'])
 
-  dual_net = ProductEBMDiffusionModel(net_one, net_two)
-  ddpm = PortableDiffusionModel(data_dim, n_steps, dual_net, var_type="beta_forward")
+            ddpm = PortableDiffusionModel(data_dim, n_steps, dual_net, var_type="beta_forward")
 
-  def logp_unnorm(x, t):
-    scale_e = ddpm.energy_scale(-2 - t)
-    t = jnp.ones((x.shape[0],), dtype=jnp.int32) * t
-    return -dual_net.neg_logp_unnorm(x, t) * scale_e
+            def logp_unnorm(x, t):
+                scale_e = ddpm.energy_scale(-2 - t)
+                t = jnp.ones((x.shape[0],), dtype=jnp.int32) * t
+                return -dual_net.neg_logp_unnorm(x, t) * scale_e
 
-  def _logpx(x):
-    return ddpm.logpx(x)["logpx"]
+            def _logpx(x):
+                return ddpm.logpx(x)["logpx"]
 
-  if ebm:
-    return ddpm.loss, (ddpm.loss, ddpm.sample, _logpx, logp_unnorm, ddpm.p_gradient, ddpm.p_energy)
-  else:
-    return ddpm.loss, (ddpm.loss, ddpm.sample, _logpx, logp_unnorm, ddpm.p_gradient)
+            if ebm:
+                return ddpm.loss, (ddpm.loss, ddpm.sample, _logpx, logp_unnorm, ddpm.p_gradient, ddpm.p_energy)
+            else:
+                return ddpm.loss, (ddpm.loss, ddpm.sample, _logpx, logp_unnorm, ddpm.p_gradient)
 
-forward_product = hk.multi_transform(forward_fn_product)
+        return forward_fn
 
-def forward_fn_mixture():
-  net_one = ResnetDiffusionModel(n_steps=n_steps, n_layers=4, x_dim=data_dim, h_dim=128, emb_dim=32)
+    # Create and transform forward functions for each composition type
+    compositions = {}
+    for comp_type in ['product', 'mixture', 'negation']:
+        forward = hk.multi_transform(create_forward_fn(comp_type))
 
-  if ebm:
-    net_one = EBMDiffusionModel(net_one)
+        # Unpack and jit the functions
+        if ebm:
+            _, sample_fn, nll, logp_unnorm_fn, gradient_fn, energy_fn = forward.apply
+            compositions[comp_type] = [
+                jax.jit(sample_fn, static_argnums=2),
+                jax.jit(nll),
+                jax.jit(logp_unnorm_fn),
+                jax.jit(gradient_fn),
+                jax.jit(energy_fn)
+            ]
+        else:
+            _, sample_fn, nll, logp_unnorm_fn, gradient_fn = forward.apply
+            compositions[comp_type] = [
+                jax.jit(sample_fn, static_argnums=2),
+                jax.jit(nll),
+                jax.jit(logp_unnorm_fn),
+                jax.jit(gradient_fn)
+            ]
+    return compositions
 
-  net_two = ResnetDiffusionModel(n_steps=n_steps, n_layers=4, x_dim=data_dim, h_dim=128, emb_dim=32)
-
-  if ebm:
-    net_two = EBMDiffusionModel(net_two)
-
-  dual_net = MixtureEBMDiffusionModel(net_one, net_two)
-  ddpm = PortableDiffusionModel(data_dim, n_steps, dual_net, var_type="beta_forward")
-
-  def logp_unnorm(x, t):
-    scale_e = ddpm.energy_scale(-2 - t)
-    t = jnp.ones((x.shape[0],), dtype=jnp.int32) * t
-    return -dual_net.neg_logp_unnorm(x, t) * scale_e
-
-  def _logpx(x):
-    return ddpm.logpx(x)["logpx"]
-
-  if ebm:
-    return ddpm.loss, (ddpm.loss, ddpm.sample, _logpx, logp_unnorm, ddpm.p_gradient, ddpm.p_energy)
-  else:
-    return ddpm.loss, (ddpm.loss, ddpm.sample, _logpx, logp_unnorm, ddpm.p_gradient)
-
-forward_mixture = hk.multi_transform(forward_fn_mixture)
-
-def forward_fn_negation():
-  net_one = ResnetDiffusionModel(n_steps=n_steps, n_layers=4, x_dim=data_dim, h_dim=128, emb_dim=32)
-
-  if ebm:
-    net_one = EBMDiffusionModel(net_one)
-
-  net_two = ResnetDiffusionModel(n_steps=n_steps, n_layers=4, x_dim=data_dim, h_dim=128, emb_dim=32)
-
-  if ebm:
-    net_two = EBMDiffusionModel(net_two)
-
-  dual_net = NegationEBMDiffusionModel(net_one, net_two)
-  ddpm = PortableDiffusionModel(data_dim, n_steps, dual_net, var_type="beta_forward")
-
-  def logp_unnorm(x, t):
-    scale_e = ddpm.energy_scale(-2 - t)
-    t = jnp.ones((x.shape[0],), dtype=jnp.int32) * t
-    return -dual_net.neg_logp_unnorm(x, t) * scale_e
-
-  def _logpx(x):
-    return ddpm.logpx(x)["logpx"]
-
-  if ebm:
-    return ddpm.loss, (ddpm.loss, ddpm.sample, _logpx, logp_unnorm, ddpm.p_gradient, ddpm.p_energy)
-  else:
-    return ddpm.loss, (ddpm.loss, ddpm.sample, _logpx, logp_unnorm, ddpm.p_gradient)
-
-forward_negation = hk.multi_transform(forward_fn_negation)
-
-if ebm:
-  _, dual_product_sample_fn, dual_product_nll, dual_product_logp_unorm_fn, dual_product_gradient_fn, dual_product_energy_fn = forward_product.apply
-else:
-  _, dual_product_sample_fn, dual_product_nll, dual_product_logp_unorm_fn, dual_product_gradient_fn = forward_product.apply
-
-dual_product_sample_fn = jax.jit(dual_product_sample_fn, static_argnums=2)
-dual_product_logp_unnorm_fn = jax.jit(dual_product_logp_unorm_fn)
-dual_product_gradient_fn = jax.jit(dual_product_gradient_fn)
-
-if ebm:
-  dual_product_energy_fn = jax.jit(dual_product_energy_fn)
-
-dual_product_nll = jax.jit(dual_product_nll)
-
-if ebm:
-  _, dual_mixture_sample_fn, dual_mixture_nll, dual_mixture_logp_unorm_fn, dual_mixture_gradient_fn, dual_mixture_energy_fn = forward_mixture.apply
-else:
-  _, dual_mixture_sample_fn, dual_mixture_nll, dual_mixture_logp_unorm_fn, dual_mixture_gradient_fn = forward_mixture.apply
-
-dual_mixture_sample_fn = jax.jit(dual_mixture_sample_fn, static_argnums=2)
-dual_mixture_logp_unnorm_fn = jax.jit(dual_mixture_logp_unorm_fn)
-dual_mixture_gradient_fn = jax.jit(dual_mixture_gradient_fn)
-
-if ebm:
-  dual_mixture_energy_fn = jax.jit(dual_mixture_energy_fn)
-
-dual_mixture_nll = jax.jit(dual_mixture_nll)
-
-if ebm:
-  _, dual_negation_sample_fn, dual_negation_nll, dual_negation_logp_unorm_fn, dual_negation_gradient_fn, dual_negation_energy_fn = forward_negation.apply
-else:
-  _, dual_negation_sample_fn, dual_negation_nll, dual_negation_logp_unorm_fn, dual_negation_gradient_fn = forward_negation.apply
-
-dual_negation_sample_fn = jax.jit(dual_negation_sample_fn, static_argnums=2)
-dual_negation_logp_unnorm_fn = jax.jit(dual_negation_logp_unorm_fn)
-dual_negation_gradient_fn = jax.jit(dual_negation_gradient_fn)
-
-if ebm:
-  dual_negation_energy_fn = jax.jit(dual_negation_energy_fn)
-
-dual_negation_nll = jax.jit(dual_negation_nll)
 
 """Code for different MCMC Samplers"""
 
@@ -1268,7 +1231,8 @@ def get_composition_samples(params: dict,
                             composition_type: str,
                             batch_size: int = 1000,
                             seed: int = 0,
-                            get_grad_samples: bool = False):
+                            get_grad_samples: bool = False,
+                            temperature_cfg: dict = None):
     """
     Generate samples using specified sampler and composition type.
 
@@ -1296,6 +1260,12 @@ def get_composition_samples(params: dict,
     ula_step_size = .001
 
     rng_seq = hk.PRNGSequence(seed)
+
+    # get the composition functions
+    compositions = initialize_model_compositions(100, dim, ebm=True, temperature_cfg=temperature_cfg)
+    dual_product_sample_fn, _, _, dual_product_gradient_fn, dual_product_energy_fn = compositions['product']
+    dual_mixture_sample_fn, _, _, dual_mixture_gradient_fn, dual_mixture_energy_fn = compositions['mixture']
+    dual_negation_sample_fn, _, _, dual_negation_gradient_fn, dual_negation_energy_fn = compositions['negation']
 
     # ... keeping distribution setup ...
     means = jax.random.normal(next(rng_seq), (n_mode, dim))

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import io
 
 
-def plot_points(points: np.ndarray) -> np.ndarray:
+def plot_points(points: np.ndarray, filepath: str = None) -> np.ndarray:
     """plot the points
 
     Args:
@@ -32,6 +32,9 @@ def plot_points(points: np.ndarray) -> np.ndarray:
     plt.savefig(buf, format='png')
     buf.seek(0)
     img = Image.open(buf)
+
+    if filepath is not None:
+        img.save(filepath)
     return img
 
 

@@ -48,7 +48,7 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
     sample = torch.randn((eval_batch_size,) + x_shape).to(device)
     timesteps = list(range(diffusion.num_timesteps))[::-1]
 
-    samples = []
+    samples = [sample.cpu().numpy()]
     for i, t in enumerate(tqdm(timesteps)):
         if len(sample) != 0:
             t_tensor = torch.from_numpy(np.repeat(t, len(sample))).long().to(device)
@@ -65,7 +65,8 @@ def ebm_baseline(algebra: str,
                  suffix1: str,
                  suffix2: str,
                  sampler_type: str = "MUHA",  # Can be "ULA", "UHA", "MALA", or "MUHA"
-                 eval_batch_size: int = 8000) -> np.ndarray:
+                 eval_batch_size: int = 8000,
+                 temperature_cfg: dict = None) -> np.ndarray:
     """
     Enhanced EBM baseline supporting multiple samplers.
 
@@ -75,6 +76,7 @@ def ebm_baseline(algebra: str,
         suffix2: String indicating the suffix of the second model
         sampler_type: String indicating which sampler to use ("ULA", "UHA", "MALA", or "MUHA")
         eval_batch_size: Batch size for evaluation
+        temperature_cfg: Dictionary containing temperature configurations for each algebra
     """
     from mcmc import get_composition_samples
     params1 = pickle.load(open(f'exps/{algebra}_{suffix1}/ema_model.pkl', 'rb'))
@@ -87,7 +89,8 @@ def ebm_baseline(algebra: str,
         params[k] = v
     x_samp = get_composition_samples(params, sampler_type, algebra,
                                      batch_size=eval_batch_size,
-                                     get_grad_samples=False)
+                                     get_grad_samples=False,
+                                     temperature_cfg=temperature_cfg)
     return np.array(x_samp)
 
 
@@ -225,6 +228,11 @@ def evaluate_chamfer_distance(generated_samples, target_samples):
 
     Returns:
     chamfer_dist -- Chamfer distance between the point clouds
+
+    Example:
+    >>> generated_samples = np.array([[1, 2], [3, 4], [5, 6]])
+    >>> target_samples = np.array([[2, 3], [4, 5], [6, 7]])
+    >>> evaluate_chamfer_distance(generated_samples, target_samples)
     """
 
     pc1, pc2 = generated_samples, target_samples
@@ -246,8 +254,89 @@ def evaluate_chamfer_distance(generated_samples, target_samples):
 
     return chamfer_dist
 
-# # Example usage:
-# pc1 = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
-# pc2 = np.array([[2, 3, 4], [5, 6, 7]])
-# chamfer_dist = evaluate_chamfer_distance(pc1, pc2)
-# print(chamfer_dist)
+
+def cache_rejection_baseline(composed_denoise_fn: ddpm.CachedCompositionEnergyMLP,
+                           algebras: list[str],
+                           x_shape: Tuple[int, ...],
+                           noise_scheduler: ddpm.NoiseScheduler,
+                           num_samples_per_trial: int,
+                           elbo_cfg: dict[str, Union[bool, str]],
+                           progress: bool = True) -> Tuple[np.ndarray, float]:
+    """Cached rejection sampling baseline that stores intermediate scores for efficient filtering
+
+    Args:
+        composed_denoise_fn (ddpm.CachedCompositionEnergyMLP): Cached composition model
+        algebras (list[str]): List of algebras to combine the conditions
+        x_shape (Tuple[int, ...]): Shape of each sample
+        noise_scheduler (ddpm.NoiseScheduler): Noise scheduler
+        num_samples_per_trial (int): Number of samples to generate
+        elbo_cfg (dict[str, Union[bool, str]]): Configuration for ELBO estimation
+        progress (bool, optional): Whether to show progress bar. Defaults to True.
+
+    Returns:
+        Tuple[np.ndarray, float]: Filtered samples and acceptance ratio
+    """
+    def make_estimate_log_lift(elbo_cfg):
+        def estimate_log_lift(cached_scores: torch.Tensor,
+                            noise: torch.Tensor) -> torch.Tensor:
+            if cached_scores.shape[0] == 0:
+                return torch.zeros((0,), dtype=cached_scores.dtype, device=cached_scores.device)
+            T, B, D = cached_scores.shape[0], cached_scores.shape[1], cached_scores.shape[2]
+            log_px_given_c = torch.zeros(B, device=cached_scores.device)
+            log_px = torch.zeros(B, device=cached_scores.device)
+            mini_batch = 100
+            for i in range(0, B, mini_batch):
+                log_px_given_c[i:i+mini_batch] = -(cached_scores[:, i:i+mini_batch] - noise[:, i:i+mini_batch]).pow(2).mean(dim=(0, 2))
+                log_px[i:i+mini_batch] = -(elbo_cfg["alpha"] * cached_scores[:, i:i+mini_batch] - noise[:, i:i+mini_batch]).pow(2).mean(dim=(0, 2))
+            log_lift = log_px_given_c - log_px
+            return log_lift
+        return estimate_log_lift
+
+    # Store cached scores during diffusion
+    cached_scores = [[], []]
+    def callback(x, t):
+        for i in range(len(cached_scores)):
+            cached_scores[i].append(composed_denoise_fn.cached_scores[i].clone().cpu().numpy())
+        return x
+
+    # Run diffusion process and collect samples
+    generated_samples = diffusion_baseline(composed_denoise_fn,
+                                         diffusion=noise_scheduler,
+                                         x_shape=x_shape,
+                                         eval_batch_size=num_samples_per_trial,
+                                         callback=callback,
+                                         progress=progress)
+
+    final_samples = generated_samples[-1]
+    intermediate_samples = np.array(generated_samples[:-1][::-1])
+    cached_scores = [np.array(cached_scores[i][::-1]) for i in range(len(cached_scores))]
+
+    # Convert to torch tensors for filtering
+    cached_scores = torch.from_numpy(np.array(cached_scores))
+    sqrt_alpha_bar = noise_scheduler.sqrt_alphas_cumprod
+    sqrt_one_minus_alpha_bar = noise_scheduler.sqrt_one_minus_alphas_cumprod
+    intermediate_samples = torch.from_numpy(intermediate_samples)
+
+    # Calculate noise
+    noise = (intermediate_samples - sqrt_alpha_bar[:, None, None] * torch.from_numpy(final_samples)) / sqrt_one_minus_alpha_bar[:, None, None]
+
+    # Filter samples
+    estimate_log_lift = make_estimate_log_lift(elbo_cfg)
+    cached_scores = cached_scores.to(device='cuda')
+    noise = noise.to(device='cuda')
+    energies = [estimate_log_lift(cached_scores[i], noise) for i in range(len(cached_scores))]
+
+    is_valid = torch.ones(energies[0].shape[0], dtype=torch.bool, device=cached_scores.device)
+    for algebra_idx, algebra in enumerate(algebras):
+        if algebra == "negation":
+            is_valid = is_valid & (energies[algebra_idx] <= 0)
+        elif algebra == "product":
+            is_valid = is_valid & (energies[algebra_idx] > 0)
+        elif algebra == "summation":
+            is_valid = is_valid | (energies[algebra_idx] > 0)
+
+    is_valid = is_valid.cpu().numpy()
+    filtered_samples = final_samples[is_valid]
+    acceptance_ratio = len(filtered_samples) / len(final_samples)
+
+    return filtered_samples, acceptance_ratio

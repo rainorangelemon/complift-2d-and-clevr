@@ -8,3 +8,7 @@ model:
   dataset: clevr_pos
   learn_sigma: true
   num_classes: "2"
+
+ebm:
+  num_samples_per_trial: ???
+  sampler_type: ULA

@@ -14,8 +14,13 @@ import numpy as np
 import datasets
 from positional_embeddings import PositionalEmbedding
 import wandb
+import os
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.cuda.is_available():
+    local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    device = f"cuda:{local_rank}"
+else:
+    device = "cpu"
 
 class Block(nn.Module):
     def __init__(self, size: int, widen_factor: int = 2):
@@ -95,21 +100,29 @@ class EnergyMLP(nn.Module):
 
 
 class CompositionEnergyMLP(nn.Module):
-    def __init__(self, *models, algebra='product'):
+    def __init__(self, *models, algebra='product', temperature_cfg=None):
         super().__init__()
         self.models = nn.ModuleList(models)
         self.algebra = algebra
+        if temperature_cfg is None:
+            self.tau_product = 1.0
+            self.tau_summation = 1.0
+            self.tau_negation = [1.0, 1.0]
+        else:
+            self.tau_product = temperature_cfg.product
+            self.tau_summation = temperature_cfg.mixture
+            self.tau_negation = temperature_cfg.negation
 
     def _energy(self, x, t):
         energies = [model.energy(x, t) for model in self.models]
         if self.algebra == 'product':
-            result = torch.sum(torch.stack(energies), dim=0)
+            result = torch.sum(torch.stack(energies), dim=0) * self.tau_product
         elif self.algebra == 'summation':
-            result = -torch.logsumexp(-torch.stack(energies), dim=0)
+            result = -torch.logsumexp(-torch.stack(energies) * self.tau_summation, dim=0)
         elif self.algebra == 'negation':
             energies = torch.stack(energies)
-            energies[-1] = -energies[-1]
-            energies[:-1] = energies[:-1]
+            energies[-1] = -energies[-1] * self.tau_negation[1]
+            energies[:-1] = energies[:-1] * self.tau_negation[0]
             result = torch.sum(energies, dim=0)
         else:
             raise NotImplementedError
@@ -126,14 +139,43 @@ class CompositionEnergyMLP(nn.Module):
                 x = x.clone().detach().requires_grad_(True)
                 energy = self._energy(x, t)
                 grad = torch.autograd.grad(energy.sum(), x, create_graph=True)[0]
-            # print(x.max(), energy.shape, energy.max(), grad.shape, grad.max(), x[(grad.abs().sum(-1).argmax())])
             if not torch.is_grad_enabled():
                 grad = grad.detach()
-            # print('composition', grad.shape)
             return grad
 
     def energy(self, x, t):
         return self._energy(x, t)
+
+
+class CachedCompositionEnergyMLP(CompositionEnergyMLP):
+    def __init__(self, *models, **kwargs):
+        super().__init__(*models, **kwargs)
+        self.cached_scores = None
+
+    def forward(self, x, t):
+        if self.algebra == 'product':
+            scores = [model(x, t) for model in self.models]
+            self.cached_scores = scores
+            return torch.sum(torch.stack(scores), dim=0)
+        elif self.algebra == 'summation':
+            with torch.no_grad():
+                energies = [model.energy(x, t) for model in self.models]
+            scores = [model(x, t) for model in self.models]
+            self.cached_scores = scores
+            attn = torch.stack(energies)
+            softmax = F.softmax(-attn * self.tau_summation, dim=0)
+            v = torch.stack(scores)
+            softmax = softmax[..., None]
+            result = self.tau_summation * torch.sum(v * softmax, dim=0)
+            # result_super = super().forward(x, t)
+            # assert torch.allclose(result, result_super, atol=1e-6)
+            return result
+        else:
+            # negation
+            scores = [model(x, t) for model in self.models]
+            self.cached_scores = scores
+            processed_scores = [score * self.tau_negation[0] if (i != len(self.models) - 1) else -score * self.tau_negation[1] for i, score in enumerate(scores)]
+            return torch.sum(torch.stack(processed_scores), dim=0)
 
 
 class NoiseScheduler():
@@ -299,7 +341,7 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     np.random.seed(0)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(0)
+        torch.cuda.manual_seed(0)
 
     model = {'energy': EnergyMLP, 'mlp': MLP}[config.mlp_type](
         hidden_size=config.hidden_size,

@@ -341,7 +341,7 @@ def calculate_elbo(model: torch.nn.Module,
                    n_samples: int,
                    seed: int,
                    mini_batch: int,
-                   same_noise: bool,
+                   same_noise: Union[bool, str],
                    sample_timesteps: str,
                    progress: bool=False) -> torch.Tensor:
     """calculate the approximate ELBO
@@ -371,12 +371,16 @@ def calculate_elbo(model: torch.nn.Module,
 
     B, *D = x_t.shape
 
-    if same_noise:
-        # sample noise (batch, n_sample, n_features)
-        # following https://arxiv.org/pdf/2305.15241, use the same noise for all samples
-        noise = torch.randn(1, 1, *D, device=x_t.device).expand(B, n_samples, *D)
+    if isinstance(same_noise, bool):
+        if same_noise:
+            # sample noise (batch, n_sample, n_features)
+            # following https://arxiv.org/pdf/2305.15241, use the same noise for all samples
+            noise = torch.randn(1, 1, *D, device=x_t.device).expand(B, n_samples, *D)
+        else:
+            noise = torch.randn(1, n_samples, *D, device=x_t.device).expand(B, n_samples, *D)
     else:
-        noise = torch.randn(1, n_samples, *D, device=x_t.device).expand(B, n_samples, *D)
+        assert same_noise == "independent"
+        noise = torch.randn(B, n_samples, *D, device=x_t.device)
 
     T = noise_scheduler.num_timesteps
     if sample_timesteps == "interleave":

@@ -23,6 +23,8 @@ calculate_elbo
 )
 from utils import plot_two_intervals, plot_energy_histogram
 import ComposableDiff
+from anneal_samplers import AnnealedUHASampler, AnnealedULASampler
+import os
 
 
 def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
@@ -49,7 +51,11 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
                             all the samples are stored in CPU to save GPU memory.
     """
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        local_rank = int(os.environ.get('LOCAL_RANK', 0))
+        device = f"cuda:{local_rank}"
+    else:
+        device = "cpu"
     sample = torch.randn((eval_batch_size,) + x_shape, device=device)
     indices = list(range(diffusion.num_timesteps))[::-1]
 
@@ -77,140 +83,75 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
     return samples
 
 
-def ebm_baseline(model_to_test,
-                 num_timesteps=50,
-                 eval_batch_size=8000,
-                 temperature=1,
-                 samples_per_step=10,
-                 callback=None):
+def ebm_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                 x_shape: Tuple[int, ...],
+                 noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
+                                        ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
+                 num_samples_per_trial: int,
+                 ebm_cfg: dict[str, Union[float, str]],
+                 progress: bool,
+                 ) -> List[torch.Tensor]:
+    """ebm baseline
 
-    noise_scheduler = ddpm.NoiseScheduler(num_timesteps=num_timesteps)
-    device = ddpm.device
-    model_to_test = model_to_test.to(device)
+    Args:
+        composed_denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): denoising function for the composed model
+        x_shape (Tuple[int, ...]): shape of each sample
+        noise_scheduler (Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion, ComposableDiff.composable_diffusion.respace.SpacedDiffusion]): noise scheduler
+        num_samples_per_trial (int): number of samples to generate
+        rejection_scheduler_cfg (dict[str, Union[float, str]]): configuration for the rejection scheduler
+        elbo_cfg (dict[str, Union[bool, str]]): configuration for the elbo estimation
+        progress (bool): whether to show the progress bar
 
-    num_steps = 50
-    dim = 2
-    init_std = 1.
-    init_mu = 0.
-    damping = .5
-    mass_diag_sqrt = 1.
-    num_leapfrog = 3
-    uha_step_size = .03
-    uha_step_sizes = torch.ones((num_steps,)) * uha_step_size
+    Returns:
+        List[torch.Tensor]: generated samples
+    """
 
-    initial_distribution = dist.MultivariateNormal(loc=torch.zeros(dim).to(device) + init_mu, covariance_matrix=torch.eye(dim).to(device) * init_std)
+    # Hypeprparameters For Samplers : Need to be tuned carefully for generating good proposals
+    num_steps = 100
 
-    def energy_function(x, t):
-        t = num_steps - 1 - t
-        x = x.clone().to(device)
-        t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
-        return -(model_to_test.energy(x, t_tensor)) * temperature / noise_scheduler.sqrt_one_minus_alphas_cumprod[t]
+    #ULA
+    la_steps = 20
+    la_step_sizes = noise_scheduler.betas * 2
+
+    #UHMC SAMPLER
+    ha_steps = 10
+    num_leapfrog_steps = 3
+    damping_coeff = 0.7
+    mass_diag_sqrt = noise_scheduler.betas
+    ha_step_sizes = noise_scheduler.betas * 0.1
 
     def gradient_function(x, t):
-        t = num_steps - 1 - t
-        x = x.clone().to(device)
-        t_tensor = torch.from_numpy(np.repeat(t, eval_batch_size)).long().to(device)
-        return -(model_to_test(x, t_tensor)) * temperature / noise_scheduler.sqrt_one_minus_alphas_cumprod[t]
+        scalar = 1 / noise_scheduler.sqrt_one_minus_alphas_cumprod
+        eps = composed_denoise_fn(x, t).chunk(2, dim=1)[0]
+        scale = scalar[t[0]]
+        return -1*scale*eps
 
-    # Create an instance of the AnnealedMUHASampler
-    sampler = AnnealedMUHASampler(num_steps=num_steps,
-                                num_samples_per_step=samples_per_step,
-                                step_sizes=uha_step_sizes,
-                                damping_coeff=damping,
-                                mass_diag_sqrt=mass_diag_sqrt,
-                                num_leapfrog_steps=num_leapfrog,
-                                initial_distribution=initial_distribution,
-                                gradient_function=gradient_function,
-                                energy_function=energy_function,)
-
-    total_samples, _, _, _ = sampler.sample(n_samples=eval_batch_size, callback=callback)
-    return total_samples.cpu().numpy()
-
-
-def ebm_rejection_baseline(composed_model,
-                           models,
-                           intervals,
-                           algebra,
-                           **kwargs):
-
-    assert len(models) == 2
-    assert algebra in ['product', 'summation', 'negation']
-    device = ddpm.device
-    num_timesteps = kwargs.get('num_timesteps', 50)
-    filter_ratios = []
-
-    def callback(x, reverse_t):
-        t = num_timesteps - 1 - reverse_t
-        if isinstance(x, torch.Tensor):
-            x_numpy = x.cpu().numpy()
-        x = torch.from_numpy(x_numpy).float().to(device)
-        t_tensor = torch.from_numpy(np.repeat(t, len(x))).long().to(device)
-        energies = [model.energy(x, t_tensor) for model in models]
-        interval_mins = [interval[reverse_t][0] for interval in intervals]
-        interval_maxs = [interval[reverse_t][1] for interval in intervals]
-        out_of_interval = [((energy < interval_min) | (energy > interval_max)) for energy, interval_min, interval_max in zip(energies, interval_mins, interval_maxs)]
-        if algebra == 'product':
-            need_to_remove = out_of_interval[0] | out_of_interval[1]
-        elif algebra == 'summation':
-            need_to_remove = out_of_interval[0] & out_of_interval[1]
-        elif algebra == 'negation':
-            need_to_remove = out_of_interval[0] | (~out_of_interval[1])
-        need_to_remove = need_to_remove.cpu().numpy()
-        filter_ratios.append(need_to_remove.sum() / len(x))
-        # repurpose
-        if need_to_remove.sum() != len(x):
-            x_numpy[need_to_remove] = x_numpy[~need_to_remove][np.random.choice(np.sum(~need_to_remove), need_to_remove.sum(), replace=True)]
-
-        return torch.from_numpy(x_numpy).float().to(device)
-
-    total_samples = ebm_baseline(composed_model, **kwargs, callback=callback)
-    return total_samples, filter_ratios
-
-
-def diffusion_rejection_baseline(composed_model,
-                                 models,
-                                 intervals,
-                                 algebra,
-                                 resample=True,
-                                 **kwargs):
-    assert len(models) == 2
-    assert algebra in ['product', 'summation', 'negation']
-    device = ddpm.device
-    num_timesteps = kwargs.get('num_timesteps', 50)
-    filter_ratios = []
+    if ebm_cfg.sampler_type == 'ULA':
+        sampler = AnnealedULASampler(num_steps, la_steps, la_step_sizes, gradient_function)
+    elif ebm_cfg.sampler_type == 'UHMC':
+        sampler = AnnealedUHASampler(num_steps,
+                    ha_steps,
+                    ha_step_sizes,
+                    damping_coeff,
+                    mass_diag_sqrt,
+                    num_leapfrog_steps,
+                    gradient_function,
+                )
+    else:
+        raise ValueError(f"Sampler type {ebm_cfg.sampler_type} not supported")
 
     def callback(x, t):
-        reverse_t = num_timesteps - 1 - t
-        if isinstance(x, torch.Tensor):
-            x_numpy = x.cpu().numpy()
-        x = torch.from_numpy(x_numpy).float().to(device)
-        t_tensor = torch.full((len(x),), t, dtype=torch.long, device=device)
-        energies = [model.energy(x, t_tensor) for model in models]
-        interval_mins = [interval[reverse_t][0] for interval in intervals]
-        interval_maxs = [interval[reverse_t][1] for interval in intervals]
-        out_of_interval = [((energy < interval_min) | (energy > interval_max)) for energy, interval_min, interval_max in zip(energies, interval_mins, interval_maxs)]
-        if algebra == 'product':
-            need_to_remove = out_of_interval[0] | out_of_interval[1]
-        elif algebra == 'summation':
-            need_to_remove = out_of_interval[0] & out_of_interval[1]
-        elif algebra == 'negation':
-            need_to_remove = out_of_interval[0] | (~out_of_interval[1])
-        need_to_remove = need_to_remove.cpu().numpy()
-        filter_ratios.append(need_to_remove.sum() / len(x))
-        # repurpose
-        if need_to_remove.sum() != len(x):
-            if resample:
-                x_numpy[need_to_remove] = x_numpy[~need_to_remove][np.random.choice(np.sum(~need_to_remove), need_to_remove.sum(), replace=True)]
-            else:
-                x_numpy = x_numpy[~need_to_remove]
+        if t[0] > 50:
+            return sampler.sample_step(x, t[0], t, model_args={})
         else:
-            x_numpy = np.empty((0, x_numpy.shape[1]))
+            return x
 
-        return torch.from_numpy(x_numpy).float().to(device)
-
-
-    total_samples = diffusion_baseline(composed_model, **kwargs, callback=callback)
-    return total_samples, filter_ratios
+    samples = diffusion_baseline(composed_denoise_fn, noise_scheduler,
+                                 x_shape=x_shape,
+                                 eval_batch_size=num_samples_per_trial,
+                                 callback=callback,
+                                 progress=progress)
+    return samples
 
 
 def create_intervene_timesteps(method: str,
