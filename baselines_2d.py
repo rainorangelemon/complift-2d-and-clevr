@@ -9,15 +9,7 @@ import torch
 import torch.distributions as dist
 import ot
 from typing import Tuple, List, Callable, Dict, Optional
-from r_and_r import (
-intermediate_distribution,
-calculate_interval,
-calculate_energy,
-need_to_remove_with_thresholds,
-calculate_interval_multiple_timesteps,
-calculate_interval_to_avoid_multiple_timesteps,
-calculate_elbo
-)
+from r_and_r import calculate_elbo
 from utils import plot_two_intervals
 # from simple_distributions_debugged import get_composition_samples
 import pickle
