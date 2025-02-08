@@ -1,3 +1,7 @@
+"""
+The 2D synthetic datasets
+"""
+
 import numpy as np
 import torch
 
