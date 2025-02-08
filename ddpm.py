@@ -319,7 +319,7 @@ class NoiseScheduler():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment_name", type=str, default="base")
-    parser.add_argument("--dataset", type=str, default="dino")
+    parser.add_argument("--dataset", type=str)
     parser.add_argument("--train_batch_size", type=int, default=128)
     parser.add_argument("--eval_batch_size", type=int, default=1000)
     parser.add_argument("--num_epochs", type=int, default=200)
