@@ -28,7 +28,7 @@ class ClassificationDataset(Dataset):
         self.random_flip = random_flip
 
         EXTS = ['jpg', 'jpeg', 'png']
-        self.paths = sorted([p for ext in EXTS for p in Path(f'{test_img_folder}').glob(f'**/*.{ext}')])
+        self.paths = sorted([p for ext in EXTS for p in Path(f'{test_img_folder}').glob(f'*.{ext}')])
 
         # load data
         data = np.load(self.val_path)

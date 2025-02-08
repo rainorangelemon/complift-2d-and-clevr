@@ -9,7 +9,7 @@ import hydra
 from tqdm.auto import tqdm
 
 
-def classification_with_sam(mask_generator, image, input_points):
+def classification_with_sam(mask_generator, image, input_points, return_anns=False):
     anns = mask_generator.generate(image)
 
     input_points = np.array(input_points)
@@ -33,7 +33,10 @@ def classification_with_sam(mask_generator, image, input_points):
         if not success_per_point:
             draw_labels[i] = 0
 
-    return success, background_mask, draw_labels
+    if return_anns:
+        return success, background_mask, draw_labels, anns
+    else:
+        return success, background_mask, draw_labels
 
 
 @hydra.main(config_path="../conf", config_name="clevr_pos", version_base="1.1")
