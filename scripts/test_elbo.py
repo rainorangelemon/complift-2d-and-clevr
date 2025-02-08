@@ -8,9 +8,9 @@ from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 
 import ddpm
-from r_and_r import calculate_elbo
+from complift import calculate_elbo
 
-wandb.init(project="r_and_r", name="test_elbo")
+wandb.init(project="lift_2d", name="test_elbo")
 wandb.run.log_code(".")
 
 num_timesteps = 50

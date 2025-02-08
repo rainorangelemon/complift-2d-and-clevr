@@ -9,9 +9,7 @@ import torch
 import torch.distributions as dist
 import ot
 from typing import Tuple, List, Callable, Dict, Optional
-from r_and_r import calculate_elbo
-from utils import plot_two_intervals
-# from simple_distributions_debugged import get_composition_samples
+from complift import calculate_elbo
 import pickle
 
 

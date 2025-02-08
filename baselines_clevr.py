@@ -12,8 +12,7 @@ import torch
 import torch.distributions as dist
 import ot
 from typing import Tuple, List, Dict
-from r_and_r import calculate_elbo
-from utils import plot_two_intervals, plot_energy_histogram
+from complift import calculate_elbo
 import ComposableDiff
 from anneal_samplers import AnnealedUHASampler, AnnealedULASampler
 import os
@@ -90,8 +89,7 @@ def ebm_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], tor
         x_shape (Tuple[int, ...]): shape of each sample
         noise_scheduler (Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion, ComposableDiff.composable_diffusion.respace.SpacedDiffusion]): noise scheduler
         num_samples_per_trial (int): number of samples to generate
-        rejection_scheduler_cfg (dict[str, Union[float, str]]): configuration for the rejection scheduler
-        elbo_cfg (dict[str, Union[bool, str]]): configuration for the elbo estimation
+        ebm_cfg (dict[str, Union[float, str]]): configuration for the ebm
         progress (bool): whether to show the progress bar
 
     Returns:

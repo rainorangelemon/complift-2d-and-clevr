@@ -43,7 +43,7 @@ def create_metric_row(algebra, metrics_dict, methods):
 @hydra.main(config_path="../conf", config_name="2d")
 def main(cfg: DictConfig):
     # Initialize wandb
-    wandb.init(project="r_and_r", name=f"synthetic data 2d {cfg.ebm.temperature.product},{cfg.ebm.temperature.mixture},{cfg.ebm.temperature.negation}")
+    wandb.init(project="lift_2d", name=f"synthetic data 2d {cfg.ebm.temperature.product},{cfg.ebm.temperature.mixture},{cfg.ebm.temperature.negation}")
     wandb.run.log_code(".")
 
     # Initialize pandas dataframe
