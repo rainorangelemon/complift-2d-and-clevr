@@ -84,7 +84,7 @@ def ebm_baseline(algebra: str,
     return np.array(x_samp)
 
 
-def make_estimate_log_lift(elbo_cfg: dict[str, Union[bool, str]],
+def make_estimate_lift(elbo_cfg: dict[str, Union[bool, str]],
                            noise_scheduler: ddpm.NoiseScheduler,
                            progress: bool=False) -> Callable[[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], torch.Tensor, torch.Tensor], torch.Tensor]:
     """Creates a function to estimate the log of lift
@@ -97,7 +97,7 @@ def make_estimate_log_lift(elbo_cfg: dict[str, Union[bool, str]],
     Returns:
         Callable[[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], torch.Tensor, torch.Tensor], torch.Tensor]: Function to estimate the negative log probability.
     """
-    def estimate_log_lift(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+    def estimate_lift(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                             x: torch.Tensor,
                             t: torch.Tensor) -> torch.Tensor:
         if x.shape[0] == 0:
@@ -123,9 +123,9 @@ def make_estimate_log_lift(elbo_cfg: dict[str, Union[bool, str]],
                                 same_noise=elbo_cfg["same_noise"],
                                 sample_timesteps=elbo_cfg["sample_timesteps"],
                                 progress=progress)
-        log_lift = log_px_given_c - log_px
-        return log_lift
-    return estimate_log_lift
+        lift = log_px_given_c - log_px
+        return lift
+    return estimate_lift
 
 
 def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
@@ -155,7 +155,7 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
     """
     assert all([algebra in ['product', 'summation', 'negation'] for algebra in algebras])
 
-    estimate_log_lift = make_estimate_log_lift(elbo_cfg, noise_scheduler)
+    estimate_lift = make_estimate_lift(elbo_cfg, noise_scheduler)
 
     energies_across_timesteps = {}
     unfiltered_samples = []
@@ -163,7 +163,7 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
     def callback(x, t):
         unfiltered_samples.append(x.clone().cpu().numpy())
         if t[0] == 0:
-            energies = [estimate_log_lift(denoise_fn, x, t) for denoise_fn in conditions_denoise_fn]
+            energies = [estimate_lift(denoise_fn, x, t) for denoise_fn in conditions_denoise_fn]
             energies_across_timesteps[t[0].item()] = [e.cpu().numpy() for e in energies]
             is_valid = torch.ones(len(x), dtype=torch.bool, device=x.device)
             for algebra_idx, algebra in enumerate(algebras):
@@ -266,8 +266,8 @@ def cache_rejection_baseline(composed_denoise_fn: ddpm.CachedCompositionEnergyML
     Returns:
         Tuple[np.ndarray, float]: Filtered samples and acceptance ratio
     """
-    def make_estimate_log_lift(elbo_cfg):
-        def estimate_log_lift(cached_scores: torch.Tensor,
+    def make_estimate_lift(elbo_cfg):
+        def estimate_lift(cached_scores: torch.Tensor,
                             noise: torch.Tensor) -> torch.Tensor:
             if cached_scores.shape[0] == 0:
                 return torch.zeros((0,), dtype=cached_scores.dtype, device=cached_scores.device)
@@ -278,9 +278,9 @@ def cache_rejection_baseline(composed_denoise_fn: ddpm.CachedCompositionEnergyML
             for i in range(0, B, mini_batch):
                 log_px_given_c[i:i+mini_batch] = -(cached_scores[:, i:i+mini_batch] - noise[:, i:i+mini_batch]).pow(2).mean(dim=(0, 2))
                 log_px[i:i+mini_batch] = -(elbo_cfg["alpha"] * cached_scores[:, i:i+mini_batch] - noise[:, i:i+mini_batch]).pow(2).mean(dim=(0, 2))
-            log_lift = log_px_given_c - log_px
-            return log_lift
-        return estimate_log_lift
+            lift = log_px_given_c - log_px
+            return lift
+        return estimate_lift
 
     # Store cached scores during diffusion
     cached_scores = [[], []]
@@ -311,10 +311,10 @@ def cache_rejection_baseline(composed_denoise_fn: ddpm.CachedCompositionEnergyML
     noise = (intermediate_samples - sqrt_alpha_bar[:, None, None] * torch.from_numpy(final_samples)) / sqrt_one_minus_alpha_bar[:, None, None]
 
     # Filter samples
-    estimate_log_lift = make_estimate_log_lift(elbo_cfg)
+    estimate_lift = make_estimate_lift(elbo_cfg)
     cached_scores = cached_scores.to(device='cuda')
     noise = noise.to(device='cuda')
-    energies = [estimate_log_lift(cached_scores[i], noise) for i in range(len(cached_scores))]
+    energies = [estimate_lift(cached_scores[i], noise) for i in range(len(cached_scores))]
 
     is_valid = torch.ones(energies[0].shape[0], dtype=torch.bool, device=cached_scores.device)
     for algebra_idx, algebra in enumerate(algebras):
