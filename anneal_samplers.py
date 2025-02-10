@@ -1,4 +1,5 @@
 # adopted from https://github.com/yilundu/reduce_reuse_recycle
+# Line 36, 37, 129, 130 are modified to handle the case where the input is a batch of samples + Line 36, 37 are changed for the correct pdf of the normal distribution
 import torch
 import numpy as np
 
@@ -21,7 +22,7 @@ class AnnealedMALASampler:
 
   def sample_step(self, x, t,ts, model_args):
 
-    e_old,grad = self._gradient_function(x, ts, **model_args)
+    e_old, grad = self._gradient_function(x, ts, **model_args)
     for i in range(self._num_samples_per_step):
       ss = self._step_sizes[t]
       std = (2 * ss) ** .5
@@ -30,17 +31,17 @@ class AnnealedMALASampler:
       x_proposal  = x + grad * ss + noise
 
       # Compute Energy of the samples
-      e_new,grad_new = self._gradient_function(x_proposal, ts, **model_args)
+      e_new, grad_new = self._gradient_function(x_proposal, ts, **model_args)
 
-      log_xhat_given_x = -1.0*((x_proposal - x - ss * grad) ** 2).sum() / (2 * ss**2)
-      log_x_given_xhat = -1.0 * ((x - x_proposal - ss * grad_new) ** 2).sum() / (2 * ss**2)
+      log_xhat_given_x = -1.0 * ((x_proposal - x - ss * grad) ** 2).flatten(1).sum(dim=-1) / (4 * ss)
+      log_x_given_xhat = -1.0 * ((x - x_proposal - ss * grad_new) ** 2).flatten(1).sum(dim=-1) / (4 * ss)
       log_alpha = e_new-e_old +log_x_given_xhat - log_xhat_given_x
 
       # Acceptance Ratio
-      if torch.log(torch.rand(1)) < log_alpha.detach().cpu():
-        x = x_proposal
-        e_old = e_new
-        grad = grad_new
+      accepted = (torch.log(torch.rand(1)) < log_alpha.detach().cpu()).to(x.device)
+      x[accepted] = x_proposal[accepted]
+      e_old[accepted] = e_new[accepted]
+      grad[accepted] = grad_new[accepted]
 
     return x
 
@@ -125,22 +126,19 @@ class AnnealedCHASampler:
       # log_v = torch.sum(v_dist.log_prob(v_prime))
       # log_v_new = torch.sum(v_dist.log_prob(v_new))
 
-
-      log_v_new = (-0.5*(1/M**2)) *torch.sum(v_new**2) # As mean 0 and Variance M**2
-      log_v = (-0.5*(1/M**2)) *torch.sum(v_prime**2)
-
+      log_v_new = (-0.5*(1/M**2)) * (v_new**2).flatten(1).sum(dim=-1) # As mean 0 and Variance M**2
+      log_v = (-0.5*(1/M**2)) * (v_prime**2).flatten(1).sum(dim=-1)
 
       logp_accept = energy_diff + (log_v_new - log_v)
       alpha = torch.min(torch.tensor(1.0),torch.exp(logp_accept))
 
       u = torch.rand(1)
-      if u <=alpha.cpu():
-        x = x_new
-        v = v_new
-      else:
-        x = x_old
-        v = v_old
+      accepted = (u <= alpha.cpu()).to(x.device)
 
+      x[accepted] = x_new[accepted]
+      v[accepted] = v_new[accepted]
+      x[~accepted] = x_old[~accepted]
+      v[~accepted] = v_old[~accepted]
 
     return x
 

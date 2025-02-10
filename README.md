@@ -1,4 +1,4 @@
-# Improving Compositional Generation with Diffusion Models Using Lift Scores
+# CompLift
 
 The official Pytorch implementation of *Improving Compositional Generation with Diffusion Models Using Lift Scores*.
 

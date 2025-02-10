@@ -4,6 +4,7 @@ import ddpm
 import torch
 from baselines_2d import (
     ebm_baseline,
+    ebm_baseline_pytorch,
     diffusion_baseline,
     rejection_baseline,
     evaluate_chamfer_distance,
@@ -130,12 +131,18 @@ def main(cfg: DictConfig):
 
             for sampler_type in ["ULA", "UHA", "MALA", "MUHA"]:
                 with catchtime(f'ebm_{sampler_type}') as catcher:
-                    generated_samples_ebm = ebm_baseline(algebra=algebra,
-                                                         suffix1=suffix + '1',
-                                                         suffix2=suffix + '2',
-                                                         eval_batch_size=8000,
-                                                         sampler_type=sampler_type,
-                                                         temperature_cfg=cfg.ebm.temperature)
+                    # generated_samples_ebm = ebm_baseline(algebra=algebra,
+                    #                                      suffix1=suffix + '1',
+                    #                                      suffix2=suffix + '2',
+                    #                                      eval_batch_size=8000,
+                    #                                      sampler_type=sampler_type,
+                    #                                      temperature_cfg=cfg.ebm.temperature)
+                    generated_samples_ebm = ebm_baseline_pytorch(composed_denoise_fn=model_to_test,
+                                                                  composed_energy_fn=lambda x, t: model_to_test.energy(x, t),
+                                                                  x_shape=(2,),
+                                                                  noise_scheduler=ddpm.NoiseScheduler(num_timesteps=50),
+                                                                  num_samples_per_trial=8000,
+                                                                  sampler_type=sampler_type)
                     generated_samples[f'ebm_{sampler_type}'] = generated_samples_ebm
                 running_times[f"{algebra}", f'ebm_{sampler_type}'].append(catcher.time)
 

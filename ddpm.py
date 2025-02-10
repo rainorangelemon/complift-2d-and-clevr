@@ -335,7 +335,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_images_step", type=int, default=1)
     config = parser.parse_args()
 
-    wandb.init(project="ddpm", name=config.experiment_name, config=config, entity='rainorangelemon')
+    wandb.init(project="ddpm", name=config.experiment_name, config=config)
 
     # set seed
     torch.manual_seed(0)

@@ -11,6 +11,7 @@ import ot
 from typing import Tuple, List, Callable, Dict, Optional
 from complift import calculate_elbo
 import pickle
+from anneal_samplers import AnnealedMALASampler, AnnealedULASampler, AnnealedUHASampler, AnnealedCHASampler
 
 
 def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
@@ -82,6 +83,89 @@ def ebm_baseline(algebra: str,
                                      get_grad_samples=False,
                                      temperature_cfg=temperature_cfg)
     return np.array(x_samp)
+
+
+def ebm_baseline_pytorch(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                         composed_energy_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+                         x_shape: Tuple[int, ...],
+                         noise_scheduler: ddpm.NoiseScheduler,
+                         num_samples_per_trial: int,
+                         sampler_type: str = "ULA",  # Can be "ULA", "MALA", "UHMC", or "HMC"
+                         progress: bool = True) -> np.ndarray:
+    """PyTorch implementation of EBM baseline using annealed samplers
+
+    Args:
+        composed_denoise_fn: Denoising function for the composed model
+        x_shape: Shape of each sample
+        noise_scheduler: Noise scheduler
+        num_samples_per_trial: Number of samples to generate
+        sampler_type: Type of sampler to use ("ULA", "MALA", "UHMC", or "HMC")
+        progress: Whether to show progress bar
+
+    Returns:
+        np.ndarray: Generated samples
+    """
+    # Common parameters
+    num_steps = 50  # Total noise levels
+    steps_per_level = 10  # MCMC steps per noise level
+
+    # ULA/MALA parameters
+    la_step_size_scale = 0.001  # Base step size
+    la_step_sizes = torch.ones_like(noise_scheduler.betas) * la_step_size_scale
+
+    # UHMC/HMC parameters
+    num_leapfrog_steps = 3  # Standard choice for moderate dimensionality
+    damping_coeff = 0.5  # Standard choice for good mixing
+    mass_diag_sqrt = torch.ones_like(noise_scheduler.betas)  # Constant mass
+    ha_step_size_scale = 0.03  # Base step size
+    ha_step_sizes = torch.ones_like(noise_scheduler.betas) * ha_step_size_scale
+
+    def gradient(x, t):
+        scalar = 1 / noise_scheduler.sqrt_one_minus_alphas_cumprod
+        eps = composed_denoise_fn(x, t)
+        scale = scalar[t[0]]
+        return -1 * scale * eps
+
+    def gradient_cha(x, t):
+        """Gradient function for MALA and HMC samplers"""
+        scalar = 1 / noise_scheduler.sqrt_one_minus_alphas_cumprod
+        energy = composed_energy_fn(x, t)
+        eps = composed_denoise_fn(x, t)
+        scale = scalar[t[0]]
+        return -1 * scale * energy, -1 * scale * eps
+
+    if sampler_type == "MALA":
+        sampler = AnnealedMALASampler(num_steps, steps_per_level, la_step_sizes, gradient_cha)
+    elif sampler_type == "ULA":
+        sampler = AnnealedULASampler(num_steps, steps_per_level, la_step_sizes, gradient)
+    elif sampler_type in ["UHMC", "UHA"]:
+        sampler = AnnealedUHASampler(num_steps,
+                                    steps_per_level,
+                                    ha_step_sizes,
+                                    damping_coeff,
+                                    mass_diag_sqrt,
+                                    num_leapfrog_steps,
+                                    gradient)
+    elif sampler_type in ["HMC", "MUHA"]:
+        sampler = AnnealedCHASampler(num_steps,
+                                    steps_per_level,
+                                    ha_step_sizes,
+                                    damping_coeff,
+                                    mass_diag_sqrt,
+                                    num_leapfrog_steps,
+                                    gradient_cha)
+    else:
+        raise ValueError(f"Sampler type {sampler_type} not supported")
+
+    device = ddpm.device
+    sample = torch.randn((num_samples_per_trial,) + x_shape).to(device)
+    timesteps = list(range(noise_scheduler.num_timesteps))[::-1]
+
+    for i, t in enumerate(tqdm(timesteps)):
+        t_tensor = torch.from_numpy(np.repeat(t, len(sample))).long().to(device)
+        sample = sampler.sample_step(sample, t, t_tensor, model_args={})
+
+    return sample.cpu().numpy()
 
 
 def make_estimate_lift(elbo_cfg: dict[str, Union[bool, str]],
