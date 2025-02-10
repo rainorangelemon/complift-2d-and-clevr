@@ -9,7 +9,7 @@ import ComposableDiff.composable_diffusion.gaussian_diffusion
 import ComposableDiff.composable_diffusion.respace
 import torch
 from typing import Tuple, List, Dict
-from complift import calculate_elbo
+from elbo import calculate_elbo
 import ComposableDiff
 from anneal_samplers import AnnealedUHASampler, AnnealedULASampler
 import os

@@ -1,5 +1,5 @@
 # adopted from https://github.com/yilundu/reduce_reuse_recycle
-# Line 36, 37, 129, 130 are modified to handle the case where the input is a batch of samples + Line 36, 37 are changed for the correct pdf of the normal distribution
+# Line 36-41, 133-138 are modified to handle the case where the input is a batch of samples + Line 36-41 are changed for the correct pdf of the normal distribution
 import torch
 import numpy as np
 
@@ -33,8 +33,12 @@ class AnnealedMALASampler:
       # Compute Energy of the samples
       e_new, grad_new = self._gradient_function(x_proposal, ts, **model_args)
 
-      log_xhat_given_x = -1.0 * ((x_proposal - x - ss * grad) ** 2).flatten(1).sum(dim=-1) / (4 * ss)
-      log_x_given_xhat = -1.0 * ((x - x_proposal - ss * grad_new) ** 2).flatten(1).sum(dim=-1) / (4 * ss)
+      if x.ndim >= 2:
+        log_xhat_given_x = -1.0 * ((x_proposal - x - ss * grad) ** 2).flatten(1).sum(dim=-1) / (4 * ss)
+        log_x_given_xhat = -1.0 * ((x - x_proposal - ss * grad_new) ** 2).flatten(1).sum(dim=-1) / (4 * ss)
+      else:
+        log_xhat_given_x = -1.0 * ((x_proposal - x - ss * grad) ** 2).sum() / (4 * ss)
+        log_x_given_xhat = -1.0 * ((x - x_proposal - ss * grad_new) ** 2).sum() / (4 * ss)
       log_alpha = e_new-e_old +log_x_given_xhat - log_xhat_given_x
 
       # Acceptance Ratio
@@ -126,8 +130,12 @@ class AnnealedCHASampler:
       # log_v = torch.sum(v_dist.log_prob(v_prime))
       # log_v_new = torch.sum(v_dist.log_prob(v_new))
 
-      log_v_new = (-0.5*(1/M**2)) * (v_new**2).flatten(1).sum(dim=-1) # As mean 0 and Variance M**2
-      log_v = (-0.5*(1/M**2)) * (v_prime**2).flatten(1).sum(dim=-1)
+      if x.ndim >= 2:
+        log_v_new = (-0.5*(1/M**2)) * (v_new**2).flatten(1).sum(dim=-1) # As mean 0 and Variance M**2
+        log_v = (-0.5*(1/M**2)) * (v_prime**2).flatten(1).sum(dim=-1)
+      else:
+        log_v_new = (-0.5*(1/M**2)) * (v_new**2).sum() # As mean 0 and Variance M**2
+        log_v = (-0.5*(1/M**2)) * (v_prime**2).sum()
 
       logp_accept = energy_diff + (log_v_new - log_v)
       alpha = torch.min(torch.tensor(1.0),torch.exp(logp_accept))

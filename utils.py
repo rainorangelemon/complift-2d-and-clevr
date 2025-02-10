@@ -161,3 +161,40 @@ class catchtime:
         self.time = perf_counter() - self.start
         self.readout = f'Time for {self.module_str}: {self.time:.3f} seconds'
         print(self.readout)
+
+
+def evaluate_chamfer_distance(generated_samples, target_samples):
+    """
+    Calculate chamfer distance between two point clouds.
+
+    Arguments:
+    generated_samples -- First point cloud (N1 x D numpy array)
+    target_samples -- Second point cloud (N2 x D numpy array)
+
+    Returns:
+    chamfer_dist -- Chamfer distance between the point clouds
+
+    Example:
+    >>> generated_samples = np.array([[1, 2], [3, 4], [5, 6]])
+    >>> target_samples = np.array([[2, 3], [4, 5], [6, 7]])
+    >>> evaluate_chamfer_distance(generated_samples, target_samples)
+    """
+
+    pc1, pc2 = generated_samples, target_samples
+
+    # Reshape point clouds if necessary
+    pc1 = np.atleast_2d(pc1)
+    pc2 = np.atleast_2d(pc2)
+
+    # Calculate pairwise distances
+    dist_pc1_to_pc2 = np.sqrt(np.sum((pc1[:, None] - pc2) ** 2, axis=-1))
+    dist_pc2_to_pc1 = np.sqrt(np.sum((pc2[:, None] - pc1) ** 2, axis=-1))
+
+    # Minimum distance from each point in pc1 to pc2 and vice versa
+    min_dist_pc1_to_pc2 = np.min(dist_pc1_to_pc2, axis=1)
+    min_dist_pc2_to_pc1 = np.min(dist_pc2_to_pc1, axis=1)
+
+    # Chamfer distance is the sum of these minimum distances
+    chamfer_dist = np.mean(min_dist_pc1_to_pc2) + np.mean(min_dist_pc2_to_pc1)
+
+    return chamfer_dist

@@ -9,7 +9,7 @@ import torch
 import torch.distributions as dist
 import ot
 from typing import Tuple, List, Callable, Dict, Optional
-from complift import calculate_elbo
+from elbo import calculate_elbo
 import pickle
 from anneal_samplers import AnnealedMALASampler, AnnealedULASampler, AnnealedUHASampler, AnnealedCHASampler
 
@@ -52,40 +52,7 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
     return samples
 
 
-def ebm_baseline(algebra: str,
-                 suffix1: str,
-                 suffix2: str,
-                 sampler_type: str = "MUHA",  # Can be "ULA", "UHA", "MALA", or "MUHA"
-                 eval_batch_size: int = 8000,
-                 temperature_cfg: dict = None) -> np.ndarray:
-    """
-    Enhanced EBM baseline supporting multiple samplers.
-
-    Args:
-        algebra: String indicating which algebra to use
-        suffix1: String indicating the suffix of the first model
-        suffix2: String indicating the suffix of the second model
-        sampler_type: String indicating which sampler to use ("ULA", "UHA", "MALA", or "MUHA")
-        eval_batch_size: Batch size for evaluation
-        temperature_cfg: Dictionary containing temperature configurations for each algebra
-    """
-    from mcmc import get_composition_samples
-    params1 = pickle.load(open(f'exps/{algebra}_{suffix1}/ema_model.pkl', 'rb'))
-    params2 = pickle.load(open(f'exps/{algebra}_{suffix2}/ema_model.pkl', 'rb'))
-    params = {}
-    for k, v in params1.items():
-        params[k] = v
-    for k, v in params2.items():
-        k = k.replace('resnet_diffusion_model/', 'resnet_diffusion_model_1/')
-        params[k] = v
-    x_samp = get_composition_samples(params, sampler_type, algebra,
-                                     batch_size=eval_batch_size,
-                                     get_grad_samples=False,
-                                     temperature_cfg=temperature_cfg)
-    return np.array(x_samp)
-
-
-def ebm_baseline_pytorch(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+def ebm_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                          composed_energy_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                          x_shape: Tuple[int, ...],
                          noise_scheduler: ddpm.NoiseScheduler,
@@ -270,63 +237,6 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
                                  progress=progress)
 
     return samples, unfiltered_samples, len(samples[-1]) / len(unfiltered_samples[-1]), energies_across_timesteps
-
-
-def evaluate_W1(generated_samples, target_samples):
-    # Calculate the Wasserstein-1 distance using the optimal transport plan
-    w1_distance = ot.emd2(np.ones(len(generated_samples)) / len(generated_samples),
-                        np.ones(len(target_samples)) / len(target_samples),
-                        ot.dist(generated_samples, target_samples, metric='cityblock'),
-                        numItermax=int(1e7))
-    return w1_distance
-
-
-def evaluate_W2(generated_samples, target_samples):
-    cost_matrix = ot.dist(generated_samples, target_samples, metric='sqeuclidean')
-
-    # Calculate the Wasserstein-2 distance using the optimal transport plan
-    w2_distance = ot.emd2(np.ones(len(generated_samples)) / len(generated_samples),
-                        np.ones(len(target_samples)) / len(target_samples),
-                        cost_matrix,
-                        numItermax=int(1e7))
-    return np.sqrt(w2_distance)
-
-
-def evaluate_chamfer_distance(generated_samples, target_samples):
-    """
-    Calculate chamfer distance between two point clouds.
-
-    Arguments:
-    pc1 -- First point cloud (N1 x D numpy array)
-    pc2 -- Second point cloud (N2 x D numpy array)
-
-    Returns:
-    chamfer_dist -- Chamfer distance between the point clouds
-
-    Example:
-    >>> generated_samples = np.array([[1, 2], [3, 4], [5, 6]])
-    >>> target_samples = np.array([[2, 3], [4, 5], [6, 7]])
-    >>> evaluate_chamfer_distance(generated_samples, target_samples)
-    """
-
-    pc1, pc2 = generated_samples, target_samples
-
-    # Reshape point clouds if necessary
-    pc1 = np.atleast_2d(pc1)
-    pc2 = np.atleast_2d(pc2)
-
-    # Calculate pairwise distances
-    dist_pc1_to_pc2 = np.sqrt(np.sum((pc1[:, None] - pc2) ** 2, axis=-1))
-    dist_pc2_to_pc1 = np.sqrt(np.sum((pc2[:, None] - pc1) ** 2, axis=-1))
-
-    # Minimum distance from each point in pc1 to pc2 and vice versa
-    min_dist_pc1_to_pc2 = np.min(dist_pc1_to_pc2, axis=1)
-    min_dist_pc2_to_pc1 = np.min(dist_pc2_to_pc1, axis=1)
-
-    # Chamfer distance is the sum of these minimum distances
-    chamfer_dist = np.mean(min_dist_pc1_to_pc2) + np.mean(min_dist_pc2_to_pc1)
-
-    return chamfer_dist
 
 
 def cache_rejection_baseline(composed_denoise_fn: ddpm.CachedCompositionEnergyMLP,
