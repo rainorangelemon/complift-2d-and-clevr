@@ -120,7 +120,7 @@ def main(cfg: DictConfig):
         conditions_denoise_fn = conditions_denoise_fn_factory(model, th.tensor(labels[np.newaxis], dtype=th.float32),
                                                             batch_size=cfg.elbo.mini_batch, cfg=cfg)
         filtered_samples, unfiltered_samples_over_time, need_to_remove_across_timesteps, energies_across_timesteps = \
-        baselines_clevr.rejection_sampling_baseline(
+        baselines_clevr.rejection_baseline(
                                     composed_denoise_fn=lambda x, t: composed_model_fn(x, t, th.from_numpy(labels).to(device)),
                                     unconditioned_denoise_fn=conditions_denoise_fn[-1],
                                     conditions_denoise_fn=conditions_denoise_fn[:-1],

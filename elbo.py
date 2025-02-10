@@ -157,8 +157,7 @@ def add_noise_at_t(noise_scheduler: ComposableDiff.composable_diffusion.gaussian
 def calculate_elbo(model: torch.nn.Module,
                    noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
                                           ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
-                   x_t: torch.Tensor,
-                   t: int,
+                   x: torch.Tensor,
                    n_samples: int,
                    seed: int,
                    mini_batch: int,
@@ -171,10 +170,8 @@ def calculate_elbo(model: torch.nn.Module,
         model (torch.nn.Module): a diffusion model
         noise_scheduler (Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
                                ComposableDiff.composable_diffusion.respace.SpacedDiffusion]): noise scheduler
-        x_t (torch.Tensor): samples (batch, n_features)
-        t (int): timestep where x_t is at
+        x (torch.Tensor): samples (batch, n_features)
         n_samples (int): number of samples used for Monte Carlo estimation
-        cumprod_alpha (torch.Tensor): cumulative product of alpha (T,)
         seed (int): random seed
         mini_batch (int): mini batch size
         same_noise (bool): whether to use the same noise for all samples
@@ -190,45 +187,45 @@ def calculate_elbo(model: torch.nn.Module,
     if isinstance(noise_scheduler, ComposableDiff.composable_diffusion.respace.SpacedDiffusion):
         noise_scheduler = noise_scheduler.base_diffusion
 
-    B, *D = x_t.shape
+    B, *D = x.shape
 
     if isinstance(same_noise, bool):
         if same_noise:
             # sample noise (batch, n_sample, n_features)
             # following https://arxiv.org/pdf/2305.15241, use the same noise for all samples
-            noise = torch.randn(1, 1, *D, device=x_t.device).expand(B, n_samples, *D)
+            noise = torch.randn(1, 1, *D, device=x.device).expand(B, n_samples, *D)
         else:
-            noise = torch.randn(1, n_samples, *D, device=x_t.device).expand(B, n_samples, *D)
+            noise = torch.randn(1, n_samples, *D, device=x.device).expand(B, n_samples, *D)
     else:
         assert same_noise == "independent"
-        noise = torch.randn(B, n_samples, *D, device=x_t.device)
+        noise = torch.randn(B, n_samples, *D, device=x.device)
 
     T = noise_scheduler.num_timesteps
     if sample_timesteps == "interleave":
         # interleave the samples
-        ts_k = torch.linspace(t, T-1, n_samples, device=x_t.device).round().long().clamp(t, T-1)
+        ts_k = torch.linspace(0, T-1, n_samples, device=x.device).round().long().clamp(0, T-1)
         ts_k = ts_k[None, :].expand(B, n_samples)
     elif sample_timesteps == "random":
         # sample timestep randomly from [t, T): (batch, n_sample)
-        ts_k = torch.randint(t, T, (1, n_samples), device=x_t.device).expand(B, n_samples)
+        ts_k = torch.randint(0, T, (1, n_samples), device=x.device).expand(B, n_samples)
     elif sample_timesteps.startswith("specified"):
         # sample timestep from the specified timesteps
         specified_timesteps = [int(s) for s in sample_timesteps.split("specified")[1].split(",")]
-        ts_k = torch.tensor(specified_timesteps, device=x_t.device).long().flatten()[None, :].expand(B, n_samples)
+        ts_k = torch.tensor(specified_timesteps, device=x.device).long().flatten()[None, :].expand(B, n_samples)
     else:
         raise ValueError("sample_timesteps should be 'random' or 'interleave' or 'specified{t:d}'")
 
     # estimate the ELBO
-    cumprod_alpha_prev = to_tensor(noise_scheduler.alphas_cumprod_prev).to(x_t.device).float()
-    cumprod_alpha = to_tensor(noise_scheduler.alphas_cumprod).to(x_t.device).float()
+    cumprod_alpha_prev = to_tensor(noise_scheduler.alphas_cumprod_prev).to(x.device).float()
+    cumprod_alpha = to_tensor(noise_scheduler.alphas_cumprod).to(x.device).float()
 
-    denoising_matching_terms = torch.zeros(B * n_samples, device=x_t.device)
+    denoising_matching_terms = torch.zeros(B * n_samples, device=x.device)
 
     # vectorized_x_k = x_k.flatten(0, 1)
     vectorized_ts_k = ts_k.flatten()
     vectorized_noise = noise.flatten(0, 1)
-    vectorized_ts_t = torch.full((B * n_samples,), t, device=x_t.device)
-    vectorized_x_k_idx = torch.arange(B, device=x_t.device)[:, None].expand(B, n_samples).flatten()
+    vectorized_ts_t = torch.full((B * n_samples,), 0, device=x.device)
+    vectorized_x_k_idx = torch.arange(B, device=x.device)[:, None].expand(B, n_samples).flatten()
 
     if progress:
         iterator = tqdm(range(0, B * n_samples, mini_batch))
@@ -240,7 +237,7 @@ def calculate_elbo(model: torch.nn.Module,
         batch_ts_k = vectorized_ts_k[i:i + mini_batch]
         batch_noise = vectorized_noise[i:i + mini_batch]
         batch_ts_t = vectorized_ts_t[i:i + mini_batch]
-        batch_x_t = x_t[vectorized_x_k_idx[i:i + mini_batch]]
+        batch_x_t = x[vectorized_x_k_idx[i:i + mini_batch]]
         batch_x_k = add_noise_at_t(noise_scheduler,
                                    batch_x_t,
                                    batch_noise,

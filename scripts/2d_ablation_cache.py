@@ -6,7 +6,6 @@ from baselines_2d import (
     ebm_baseline,
     diffusion_baseline,
     cache_rejection_baseline,
-    calculate_elbo
 )
 from datasets import generate_data_points, get_accuracy
 from utils import catchtime, evaluate_chamfer_distance, plot_points
