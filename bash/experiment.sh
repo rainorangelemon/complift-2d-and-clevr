@@ -17,7 +17,7 @@ if [ $NUM_GPUS -ge 5 ]; then
             LOCAL_RANK=$((num_constraints-1)) python -m scripts.run_clevr_ebm \
                 num_constraints=$num_constraints \
                 experiment_name="ebm_${sampler,,}_clevr_pos_$num_constraints" \
-                ebm.num_samples_per_trial=10 \
+                ebm.num_samples_to_generate=10 \
                 ebm.sampler_type=$sampler &
         done
         wait
@@ -29,7 +29,7 @@ else
             python -m scripts.run_clevr_ebm \
                 num_constraints=$num_constraints \
                 experiment_name="ebm_${sampler,,}_clevr_pos_$num_constraints" \
-                ebm.num_samples_per_trial=10 \
+                ebm.num_samples_to_generate=10 \
                 ebm.sampler_type=$sampler
         done
     done

@@ -12,7 +12,7 @@ from typing import Tuple, List, Dict
 from elbo import calculate_elbo
 import ComposableDiff
 from anneal_samplers import AnnealedUHASampler, AnnealedULASampler
-import os
+from utils_clevr import get_device
 
 
 def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
@@ -39,11 +39,7 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
                             all the samples are stored in CPU to save GPU memory.
     """
 
-    if torch.cuda.is_available():
-        local_rank = int(os.environ.get('LOCAL_RANK', 0))
-        device = f"cuda:{local_rank}"
-    else:
-        device = "cpu"
+    device = get_device()
     sample = torch.randn((eval_batch_size,) + x_shape, device=device)
     indices = list(range(diffusion.num_timesteps))[::-1]
 
@@ -70,12 +66,11 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
         samples.append(sample.cpu())
     return samples
 
-
 def ebm_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                  x_shape: Tuple[int, ...],
                  noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
                                         ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
-                 num_samples_per_trial: int,
+                 num_samples_to_generate: int,
                  ebm_cfg: dict[str, Union[float, str]],
                  progress: bool,
                  ) -> List[torch.Tensor]:
@@ -85,7 +80,7 @@ def ebm_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], tor
         composed_denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): denoising function for the composed model
         x_shape (Tuple[int, ...]): shape of each sample
         noise_scheduler (Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion, ComposableDiff.composable_diffusion.respace.SpacedDiffusion]): noise scheduler
-        num_samples_per_trial (int): number of samples to generate
+        num_samples_to_generate (int): number of samples to generate
         ebm_cfg (dict[str, Union[float, str]]): configuration for the ebm
         progress (bool): whether to show the progress bar
 
@@ -135,7 +130,7 @@ def ebm_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], tor
 
     samples = diffusion_baseline(composed_denoise_fn, noise_scheduler,
                                  x_shape=x_shape,
-                                 eval_batch_size=num_samples_per_trial,
+                                 eval_batch_size=num_samples_to_generate,
                                  callback=callback,
                                  progress=progress)
     return samples
@@ -213,7 +208,7 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
                                 x_shape: Tuple[int, ...],
                                 noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
                                                        ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
-                                num_samples_per_trial: int,
+                                num_samples_to_generate: int,
                                 rejection_scheduler_cfg: dict[str, Union[float, str]],
                                 elbo_cfg: dict[str, Union[bool, str]],
                                 progress: bool,
@@ -226,7 +221,7 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
         conditions_denoise_fn (List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]]): denoising function for multiple conditions
         x_shape (Tuple[int, ...]): shape of each sample
         noise_scheduler (ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion, optional): noise scheduler. Defaults to None.
-        num_samples_per_trial (int, optional): number of samples to generate for each trial.
+        num_samples_to_generate (int, optional): number of samples to generate for each trial.
         rejection_scheduler_cfg (dict[str, Union[float, str]]): configuration for the rejection scheduler
         elbo_cfg (dict[str, Union[bool, str]]): configuration for the elbo estimation
         progress (bool): whether to show the progress bar
@@ -262,7 +257,7 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
     unfiltered_samples = diffusion_baseline(composed_denoise_fn,
                                             noise_scheduler,
                                             x_shape,
-                                            eval_batch_size=num_samples_per_trial,
+                                            eval_batch_size=num_samples_to_generate,
                                             callback=callback,
                                             progress=progress)
 
@@ -277,95 +272,97 @@ def cache_rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.
                                 x_shape: Tuple[int, ...],
                                 noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
                                                        ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
-                                num_samples_per_trial: int,
-                                rejection_scheduler_cfg: dict[str, Union[float, str]],
+                                num_samples_to_generate: int,
                                 elbo_cfg: dict[str, Union[bool, str]],
-                                progress: bool) -> Tuple[np.ndarray, float]:
+                                progress: bool) -> Tuple[np.ndarray, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Cached rejection sampling baseline that stores intermediate scores for efficient filtering
 
     Args:
         composed_denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): Cached composition model
         unconditioned_denoise_fn (Callable[[torch.Tensor, torch.Tensor], torch.Tensor]): Denoising function for the unconditioned model
         conditions_denoise_fn (List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]]): Denoising function for multiple conditions
+        cache_callback (Callable[[], List[torch.Tensor]]): Callback function to get cached scores and samples
         x_shape (Tuple[int, ...]): Shape of each sample
         noise_scheduler (Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion, ComposableDiff.composable_diffusion.respace.SpacedDiffusion]): Noise scheduler
-        num_samples_per_trial (int): Number of samples to generate
+        num_samples_to_generate (int): Number of samples to generate
         elbo_cfg (dict[str, Union[bool, str]]): Configuration for ELBO estimation
         progress (bool): Whether to show progress bar
 
     Returns:
-        Tuple[np.ndarray, float]: Filtered samples and acceptance ratio
+        Tuple[np.ndarray, torch.Tensor, torch.Tensor, torch.Tensor]: Filtered samples, final samples, is valid, energies
     """
+
+    device = get_device()
     def estimate_lift(cached_cond_scores: torch.Tensor,
                         cached_uncond_scores: torch.Tensor,
-                        noise: torch.Tensor,
-                        mask: torch.Tensor) -> torch.Tensor:
+                        noise: torch.Tensor) -> torch.Tensor:
         if cached_cond_scores.shape[0] == 0:
             return torch.zeros((0,), dtype=cached_cond_scores.dtype, device=cached_cond_scores.device)
-        cached_cond_scores = cached_cond_scores.flatten(start_dim=2)
-        cached_uncond_scores = cached_uncond_scores.flatten(start_dim=2)
-        noise = noise.flatten(start_dim=2)
 
-        cached_cond_scores = cached_cond_scores[mask]
-        cached_uncond_scores = cached_uncond_scores[mask]
-        noise = noise[mask]
-
-        B, *D = cached_cond_scores.shape[0], cached_cond_scores.shape[2:]
+        B = cached_cond_scores.shape[1]
         log_px_given_c = torch.zeros(B, device=cached_cond_scores.device)
         log_px = torch.zeros(B, device=cached_cond_scores.device)
         mini_batch = 20
         for i in range(0, B, mini_batch):
-            log_px_given_c[i:i+mini_batch] = -(cached_cond_scores[:, i:i+mini_batch] - noise[:, i:i+mini_batch]).pow(2).mean(dim=(0, 2))
-            log_px[i:i+mini_batch] = -(cached_uncond_scores[:, i:i+mini_batch] - noise[:, i:i+mini_batch]).pow(2).mean(dim=(0, 2))
+            log_px_given_c[i:i+mini_batch] = -(cached_cond_scores[:, i:i+mini_batch] - noise[:, i:i+mini_batch]).pow(2).mean(dim=(0, 2, 3, 4))
+            log_px[i:i+mini_batch] = -(cached_uncond_scores[:, i:i+mini_batch] - noise[:, i:i+mini_batch]).pow(2).mean(dim=(0, 2, 3, 4))
         lift = log_px_given_c - log_px
         return lift
 
+    sample_timesteps = elbo_cfg["sample_timesteps"]
+    if sample_timesteps in ["interleave", "random"]:
+        log_timesteps = list(range(noise_scheduler.num_timesteps))
+    elif sample_timesteps.startswith("specified"):
+        # sample timestep from the specified timesteps
+        specified_timesteps = [int(s) for s in sample_timesteps.split("specified")[1].split(",")]
+        log_timesteps = [noise_scheduler.timestep_map.index(t) for t in specified_timesteps]
+
     # Store cached scores during diffusion
     cached_scores = [[] for _ in range(1 + len(conditions_denoise_fn))]  # the final cached score is the unconditioned score
+    cached_xs = []
+    cached_ts = []
+    cached_mask = []
     def callback(x, t):
-        for i in range(len(cached_scores)):
-            cached_scores[i].append(cache_callback()[i].clone().cpu().numpy())
+        cached_mask.append(t[0] in log_timesteps)
+        if t[0] in log_timesteps:
+            cached_ts.append(t[0])
+            for i in range(len(cached_scores)):
+                cached_scores[i].append(cache_callback()["cached_scores"][i].clone())
+            cached_xs.append(cache_callback()["cached_xs"].clone())
         return x
 
     # Run diffusion process and collect samples
     generated_samples = diffusion_baseline(composed_denoise_fn,
                                          diffusion=noise_scheduler,
                                          x_shape=x_shape,
-                                         eval_batch_size=num_samples_per_trial,
+                                         eval_batch_size=num_samples_to_generate,
                                          callback=callback,
                                          progress=progress)
 
-    final_samples = generated_samples[-1]
-    intermediate_samples = np.array(generated_samples[:-1][::-1])
-    cached_scores = [np.array(cached_scores[i][::-1]) for i in range(len(cached_scores))]
+    final_samples = generated_samples[-1].to(device=device)
+    cached_ts = torch.stack(cached_ts).to(device=device)
+    cached_mask = torch.BoolTensor(cached_mask).to(device=device)
+    cached_scores = torch.stack([torch.stack(cached_scores[i]) for i in range(len(cached_scores))])
+    cached_xs = torch.stack(cached_xs)
 
     # Convert to torch tensors for filtering
-    cached_scores = torch.from_numpy(np.array(cached_scores))
-    sqrt_alpha_bar = noise_scheduler.sqrt_alphas_cumprod
-    sqrt_one_minus_alpha_bar = noise_scheduler.sqrt_one_minus_alphas_cumprod
-    intermediate_samples = torch.from_numpy(intermediate_samples)
+    sqrt_alpha_bar = torch.from_numpy(noise_scheduler.sqrt_alphas_cumprod).to(device=device)[cached_ts]
+    sqrt_one_minus_alpha_bar = torch.from_numpy(noise_scheduler.sqrt_one_minus_alphas_cumprod).to(device=device)[cached_ts]
 
     # Calculate noise
-    noise = (intermediate_samples - sqrt_alpha_bar.view(-1, 1, *[1] * len(x_shape)) * torch.from_numpy(final_samples)) / sqrt_one_minus_alpha_bar.view(-1, 1, *[1] * len(x_shape))
+    noise = (cached_xs - sqrt_alpha_bar.view(-1, 1, *[1] * len(x_shape)) * final_samples) / sqrt_one_minus_alpha_bar.view(-1, 1, *[1] * len(x_shape))
 
-    sample_timesteps = elbo_cfg["sample_timesteps"]
-    if sample_timesteps in ["interleave", "random"]:
-        t_mask = torch.ones(len(noise), device=final_samples.device)
-    elif sample_timesteps.startswith("specified"):
-        t_mask = torch.zeros(len(noise), device=final_samples.device)
-        # sample timestep from the specified timesteps
-        specified_timesteps = [int(s) for s in sample_timesteps.split("specified")[1].split(",")]
-        indices = [noise_scheduler.timestep_map[::-1].index(t) for t in specified_timesteps]
-        t_mask[indices] = 1
+    cached_cond_scores = cached_scores
+    cached_uncond_scores = cached_scores[-1]
 
     # Filter samples
-    cached_scores = cached_scores.to(device=noise.device)
-    noise = noise.to(device=noise.device)
-    energies = [estimate_lift(cached_scores[i], cached_scores[len(conditions_denoise_fn)], noise, t_mask) for i in range(len(conditions_denoise_fn))]
+    energies = [estimate_lift(cached_cond_scores[i],
+                              cached_uncond_scores,
+                              noise) for i in range(len(conditions_denoise_fn))]
+    energies = torch.stack(energies, dim=0)
 
     is_valid = (energies > 0).all(dim=0)
     is_valid = is_valid.cpu().numpy()
     filtered_samples = final_samples[is_valid]
-    acceptance_ratio = len(filtered_samples) / len(final_samples)
 
-    return filtered_samples, acceptance_ratio
+    return filtered_samples, final_samples, is_valid, energies

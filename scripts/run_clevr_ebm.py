@@ -5,7 +5,8 @@ import numpy as np
 import baselines_clevr
 from tqdm.auto import tqdm
 from torchvision.utils import save_image, make_grid
-from scripts.best_of_n_on_sam_dataset import create_model_and_diffusion, CLEVRPosDataset, conditions_denoise_fn_factory
+from utils_clevr import CLEVRPosDataset
+from ComposableDiff.composable_diffusion.model_creation import create_model_and_diffusion
 import wandb
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -112,7 +113,7 @@ def main(cfg: DictConfig):
                config=OmegaConf.to_container(cfg, resolve=True),
                name=f"{cfg.experiment_name}",)
 
-    NUM_SAMPLES_PER_TRIAL = cfg.ebm.num_samples_per_trial
+    NUM_SAMPLES_TO_GENERATE = cfg.ebm.num_samples_to_generate
 
     for test_idx in tqdm(range(100)):
         th.manual_seed(0)
@@ -124,7 +125,7 @@ def main(cfg: DictConfig):
             composed_denoise_fn=lambda x, t: composed_model_fn(x, t, th.from_numpy(labels).to(device)),
             x_shape=(3, 128, 128),
             noise_scheduler=diffusion,
-            num_samples_per_trial=NUM_SAMPLES_PER_TRIAL,
+            num_samples_to_generate=NUM_SAMPLES_TO_GENERATE,
             ebm_cfg=cfg.ebm,
             progress=True,
         )

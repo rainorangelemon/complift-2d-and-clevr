@@ -1,9 +1,0 @@
-defaults:
-  - clevr_base
-  - override hydra/hydra_logging: disabled
-  - override hydra/job_logging: disabled
-
-model:
-  dataset: clevr_rel
-  learn_sigma: true
-  num_classes: "4,3,9,3,3,7"

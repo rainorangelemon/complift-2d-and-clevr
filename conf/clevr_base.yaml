@@ -15,12 +15,7 @@ max_samples_for_generation: 100
 
 # for rejection sampling
 rejection:
-  num_samples_per_trial: ???
-
-# for best_of_n sampling
-best_of_n:
-  n: 10
-  mini_batch: ${elbo.mini_batch}
+  num_samples_to_generate: ???
 
 # for ELBO estimation
 elbo:
@@ -28,22 +23,12 @@ elbo:
   n_samples: 1
   same_noise: true  # if true, sample the same epsilon for all (t, epsilon) pairs
   sample_timesteps: specified928  # choose among {interleave, random, specified{timesteps}}
-  mini_batch: 20
+  mini_batch: 10
 
 # for rejection sampling
 rejection_scheduler:
   method: uniform
   timesteps_to_select: 1
-
-# for best-of-n sampling
-best_of_n_scheduler:
-  method: latest
-  timesteps_to_select: 1
-
-# for support interval estimation
-bootstrap:
-  confidence: 0.99
-  method: normal
 
 classifier:
   checkpoint_dir: ComposableDiff/models

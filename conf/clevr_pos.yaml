@@ -10,5 +10,5 @@ model:
   num_classes: "2"
 
 ebm:
-  num_samples_per_trial: ???
+  num_samples_to_generate: ???
   sampler_type: ULA

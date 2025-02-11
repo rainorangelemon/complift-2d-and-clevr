@@ -5,10 +5,13 @@ import numpy as np
 import baselines_clevr
 from tqdm.auto import tqdm
 from torchvision.utils import save_image, make_grid
-from scripts.best_of_n_on_sam_dataset import create_model_and_diffusion, CLEVRPosDataset, conditions_denoise_fn_factory
+from utils_clevr import conditions_denoise_fn_factory
+from ComposableDiff.composable_diffusion.model_creation import create_model_and_diffusion
 import wandb
 import hydra
 from omegaconf import DictConfig, OmegaConf
+
+from utils_clevr import CLEVRPosDataset
 
 
 @hydra.main(config_path="../conf", config_name="clevr_pos")
@@ -52,6 +55,14 @@ def main(cfg: DictConfig):
     # optionally, compile the model for faster execution
     # model = th.compile(model, mode="max-autotune")
 
+    class CacheCallback:
+        def __init__(self):
+            self.cached_scores = []
+
+        def __call__(self):
+            return self.cached_scores
+
+    cache_callback = CacheCallback()
 
     def composed_model_fn(x_t, ts, labels, batch_size=cfg.elbo.mini_batch // cfg.num_constraints):
         num_samples = x_t.shape[0]
@@ -60,6 +71,8 @@ def main(cfg: DictConfig):
         labels = th.cat([labels, th.zeros_like(labels[:1, :])], dim=0).to(device)
         masks = th.ones_like(labels[:, 0], dtype=th.bool).to(device)
         masks[-1] = False
+
+        cache_callback.cached_scores = th.zeros((len(labels), *x_t.shape), device=x_t.device)
 
         labels = labels.unsqueeze(0)
         masks = masks.unsqueeze(0)
@@ -84,6 +97,8 @@ def main(cfg: DictConfig):
             model_out = model(combined, ts_batch, y=current_label, masks=current_mask)
             eps, rest = model_out[:, :3], model_out[:, 3:]
 
+            cache_callback.cached_scores[:, i:i+batch_size] = eps.view(current_batch_size, -1, *eps.shape[1:]).transpose(0, 1)
+
             cond_eps, uncond_eps = eps[current_mask], eps[~current_mask]
             uncond_eps = uncond_eps.view(current_batch_size, -1, *uncond_eps.shape[1:])
             cond_eps = cond_eps.view(current_batch_size, -1, *cond_eps.shape[1:])
@@ -107,10 +122,10 @@ def main(cfg: DictConfig):
                config=OmegaConf.to_container(cfg, resolve=True),
                name=f"{cfg.experiment_name}",)
 
-    NUM_SAMPLES_PER_TRIAL = cfg.rejection.num_samples_per_trial
+    NUM_SAMPLES_TO_GENERATE = cfg.rejection.num_samples_to_generate
 
-    packed_samples = th.zeros((5000, NUM_SAMPLES_PER_TRIAL, 3, 128, 128))
-    packed_energies = th.zeros((5000, cfg.num_constraints, NUM_SAMPLES_PER_TRIAL))
+    packed_samples = th.zeros((5000, NUM_SAMPLES_TO_GENERATE, 3, 128, 128))
+    packed_energies = th.zeros((5000, cfg.num_constraints, NUM_SAMPLES_TO_GENERATE))
     for test_idx in tqdm(range(5000)):
 
         th.manual_seed(0)
@@ -126,7 +141,7 @@ def main(cfg: DictConfig):
                                     conditions_denoise_fn=conditions_denoise_fn[:-1],
                                     x_shape=(3, 128, 128),
                                     noise_scheduler=diffusion,
-                                    num_samples_per_trial=NUM_SAMPLES_PER_TRIAL,
+                                    num_samples_to_generate=cfg.rejection.num_samples_to_generate,
                                     rejection_scheduler_cfg=cfg.rejection_scheduler,
                                     elbo_cfg=cfg.elbo,
                                     progress=False,
@@ -139,9 +154,9 @@ def main(cfg: DictConfig):
             # randomly pick one sample
             sample_at_final_t = filtered_samples[np.random.randint(len(filtered_samples))]
         else:
-            # choose the one with minimum energy
-            score = packed_energies[test_idx].sum(dim=0)
-            sample_at_final_t = unfiltered_samples_over_time[-1][score.argmin()]
+            # choose the one with maximum worst energy
+            score = packed_energies[test_idx].min(dim=0).values
+            sample_at_final_t = unfiltered_samples_over_time[-1][score.argmax()]
 
         sample_at_final_t = (sample_at_final_t + 1) / 2
         grid = make_grid(sample_at_final_t, nrow=1, padding=0)

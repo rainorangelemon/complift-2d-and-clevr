@@ -1,4 +1,4 @@
-from scripts.best_of_n_on_sam_dataset import CLEVRPosDataset
+from utils_clevr import CLEVRPosDataset
 import os
 import numpy as np
 import torch

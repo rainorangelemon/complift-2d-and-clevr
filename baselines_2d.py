@@ -56,7 +56,7 @@ def ebm_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], tor
                          composed_energy_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                          x_shape: Tuple[int, ...],
                          noise_scheduler: ddpm.NoiseScheduler,
-                         num_samples_per_trial: int,
+                         num_samples_to_generate: int,
                          sampler_type: str = "ULA",  # Can be "ULA", "MALA", "UHMC", or "HMC"
                          progress: bool = True) -> np.ndarray:
     """PyTorch implementation of EBM baseline using annealed samplers
@@ -65,7 +65,7 @@ def ebm_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], tor
         composed_denoise_fn: Denoising function for the composed model
         x_shape: Shape of each sample
         noise_scheduler: Noise scheduler
-        num_samples_per_trial: Number of samples to generate
+        num_samples_to_generate: Number of samples to generate
         sampler_type: Type of sampler to use ("ULA", "MALA", "UHMC", or "HMC")
         progress: Whether to show progress bar
 
@@ -125,7 +125,7 @@ def ebm_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], tor
         raise ValueError(f"Sampler type {sampler_type} not supported")
 
     device = ddpm.device
-    sample = torch.randn((num_samples_per_trial,) + x_shape).to(device)
+    sample = torch.randn((num_samples_to_generate,) + x_shape).to(device)
     timesteps = list(range(noise_scheduler.num_timesteps))[::-1]
 
     for i, t in enumerate(tqdm(timesteps)):
@@ -182,7 +182,7 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
                                 algebras: list[str],
                                 x_shape: Tuple[int, ...],
                                 noise_scheduler: ddpm.NoiseScheduler,
-                                num_samples_per_trial: int,
+                                num_samples_to_generate: int,
                                 elbo_cfg: dict[str, Union[bool, str]],
                                 progress: bool,
         ) -> Tuple[torch.Tensor, List[torch.Tensor], Dict[int, np.ndarray], Dict[int, List[np.ndarray]]]:
@@ -194,7 +194,7 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
         algebras (list[str]): algebra to combine the conditions
         x_shape (Tuple[int, ...]): shape of each sample
         noise_scheduler (ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion, optional): noise scheduler. Defaults to None.
-        num_samples_per_trial (int, optional): number of samples to generate for each trial.
+        num_samples_to_generate (int, optional): number of samples to generate for each trial.
         elbo_cfg (dict[str, Union[bool, str]]): configuration for the elbo estimation
         progress (bool): whether to show the progress bar
 
@@ -230,7 +230,7 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
     samples = diffusion_baseline(composed_denoise_fn,
                                  noise_scheduler,
                                  x_shape,
-                                 eval_batch_size=num_samples_per_trial,
+                                 eval_batch_size=num_samples_to_generate,
                                  callback=callback,
                                  progress=progress)
 
@@ -241,7 +241,7 @@ def cache_rejection_baseline(composed_denoise_fn: ddpm.CachedCompositionEnergyML
                            algebras: list[str],
                            x_shape: Tuple[int, ...],
                            noise_scheduler: ddpm.NoiseScheduler,
-                           num_samples_per_trial: int,
+                           num_samples_to_generate: int,
                            elbo_cfg: dict[str, Union[bool, str]],
                            progress: bool = True) -> Tuple[np.ndarray, float]:
     """Cached rejection sampling baseline that stores intermediate scores for efficient filtering
@@ -251,7 +251,7 @@ def cache_rejection_baseline(composed_denoise_fn: ddpm.CachedCompositionEnergyML
         algebras (list[str]): List of algebras to combine the conditions
         x_shape (Tuple[int, ...]): Shape of each sample
         noise_scheduler (ddpm.NoiseScheduler): Noise scheduler
-        num_samples_per_trial (int): Number of samples to generate
+        num_samples_to_generate (int): Number of samples to generate
         elbo_cfg (dict[str, Union[bool, str]]): Configuration for ELBO estimation
         progress (bool, optional): Whether to show progress bar. Defaults to True.
 
@@ -285,7 +285,7 @@ def cache_rejection_baseline(composed_denoise_fn: ddpm.CachedCompositionEnergyML
     generated_samples = diffusion_baseline(composed_denoise_fn,
                                          diffusion=noise_scheduler,
                                          x_shape=x_shape,
-                                         eval_batch_size=num_samples_per_trial,
+                                         eval_batch_size=num_samples_to_generate,
                                          callback=callback,
                                          progress=progress)
 

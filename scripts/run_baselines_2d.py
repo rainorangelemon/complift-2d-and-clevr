@@ -94,7 +94,7 @@ def main(cfg: DictConfig):
                                                                                          algebras=["product", algebra],
                                                                                          x_shape=(2,),
                                                                                          noise_scheduler=ddpm.NoiseScheduler(num_timesteps=50),
-                                                                                         num_samples_per_trial=8000,
+                                                                                         num_samples_to_generate=8000,
                                                                                          elbo_cfg=cfg.elbo,
                                                                                          progress=True)
                 generated_samples_rejection = generated_samples_rejection[-1]
@@ -109,7 +109,7 @@ def main(cfg: DictConfig):
                                                                                          algebras=["product", algebra],
                                                                                          x_shape=(2,),
                                                                                          noise_scheduler=ddpm.NoiseScheduler(num_timesteps=50),
-                                                                                         num_samples_per_trial=8000,
+                                                                                         num_samples_to_generate=8000,
                                                                                          elbo_cfg=cfg.elbo,
                                                                                          progress=True)
                 generated_samples_rejection = generated_samples_rejection[-1]
@@ -121,7 +121,7 @@ def main(cfg: DictConfig):
                                                                               algebras=["product", algebra],
                                                                                x_shape=(2,),
                                                                                noise_scheduler=ddpm.NoiseScheduler(num_timesteps=50),
-                                                                               num_samples_per_trial=8000,
+                                                                               num_samples_to_generate=8000,
                                                                                elbo_cfg=cfg.elbo,
                                                                                progress=True)
                 generated_samples['cached_rejection'] = generated_samples_cached_rejection
@@ -133,7 +133,7 @@ def main(cfg: DictConfig):
                                                          composed_energy_fn=lambda x, t: model_to_test.energy(x, t),
                                                          x_shape=(2,),
                                                          noise_scheduler=ddpm.NoiseScheduler(num_timesteps=50),
-                                                         num_samples_per_trial=8000,
+                                                         num_samples_to_generate=8000,
                                                          sampler_type=sampler_type)
                     generated_samples[f'ebm_{sampler_type}'] = generated_samples_ebm
                 running_times[f"{algebra}", f'ebm_{sampler_type}'].append(catcher.time)

@@ -127,7 +127,7 @@ def main(cfg: DictConfig):
                     algebras=["product", algebra],  # First condition is always product
                     x_shape=(2,),
                     noise_scheduler=ddpm.NoiseScheduler(num_timesteps=50),
-                    num_samples_per_trial=8000,
+                    num_samples_to_generate=8000,
                     elbo_cfg=cfg.elbo
                 )
                 generated_samples[seed] = filtered_samples
