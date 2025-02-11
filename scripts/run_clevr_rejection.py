@@ -55,15 +55,6 @@ def main(cfg: DictConfig):
     # optionally, compile the model for faster execution
     # model = th.compile(model, mode="max-autotune")
 
-    class CacheCallback:
-        def __init__(self):
-            self.cached_scores = []
-
-        def __call__(self):
-            return self.cached_scores
-
-    cache_callback = CacheCallback()
-
     def composed_model_fn(x_t, ts, labels, batch_size=cfg.elbo.mini_batch // cfg.num_constraints):
         num_samples = x_t.shape[0]
 
@@ -71,8 +62,6 @@ def main(cfg: DictConfig):
         labels = th.cat([labels, th.zeros_like(labels[:1, :])], dim=0).to(device)
         masks = th.ones_like(labels[:, 0], dtype=th.bool).to(device)
         masks[-1] = False
-
-        cache_callback.cached_scores = th.zeros((len(labels), *x_t.shape), device=x_t.device)
 
         labels = labels.unsqueeze(0)
         masks = masks.unsqueeze(0)
@@ -96,8 +85,6 @@ def main(cfg: DictConfig):
 
             model_out = model(combined, ts_batch, y=current_label, masks=current_mask)
             eps, rest = model_out[:, :3], model_out[:, 3:]
-
-            cache_callback.cached_scores[:, i:i+batch_size] = eps.view(current_batch_size, -1, *eps.shape[1:]).transpose(0, 1)
 
             cond_eps, uncond_eps = eps[current_mask], eps[~current_mask]
             uncond_eps = uncond_eps.view(current_batch_size, -1, *uncond_eps.shape[1:])

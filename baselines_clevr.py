@@ -244,6 +244,13 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
 
     def callback(x, t):
         if t[0] in rejection_timesteps:
+            # load x and energies from pt
+            x_and_energies = torch.load(f"x_and_energies_{t[0].item()}.pt")
+            x_another = x_and_energies["x"]
+            energies_another = x_and_energies["energies"]
+
+            import pdb; pdb.set_trace()
+
             unspaced_t = rejection_timesteps_unspaced[rejection_timesteps.index(t[0])]
             energies = [estimate_lift(denoise_fn, x,
                                           t=torch.full((len(x),), unspaced_t, dtype=torch.long, device=x.device))
