@@ -8,7 +8,7 @@ from baselines_2d import (
     cache_rejection_baseline,
 )
 from datasets import generate_data_points, get_accuracy
-from utils import catchtime, evaluate_chamfer_distance, plot_points
+from utils_2d import catchtime, evaluate_chamfer_distance, plot_points
 import wandb
 import numpy as np
 import hydra

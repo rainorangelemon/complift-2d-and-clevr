@@ -14,8 +14,7 @@ cfg_weight: 7.5
 max_samples_for_generation: 100
 
 # for rejection sampling
-rejection:
-  num_samples_to_generate: ???
+num_samples_to_generate: ???
 
 # for ELBO estimation
 elbo:
@@ -29,6 +28,9 @@ elbo:
 rejection_scheduler:
   method: uniform
   timesteps_to_select: 1
+
+ebm:
+  sampler_type: ULA
 
 classifier:
   checkpoint_dir: ComposableDiff/models

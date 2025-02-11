@@ -113,7 +113,7 @@ def main(cfg: DictConfig):
                config=OmegaConf.to_container(cfg, resolve=True),
                name=f"{cfg.experiment_name}",)
 
-    NUM_SAMPLES_TO_GENERATE = cfg.ebm.num_samples_to_generate
+    NUM_SAMPLES_TO_GENERATE = cfg.num_samples_to_generate
 
     for test_idx in tqdm(range(100)):
         th.manual_seed(0)

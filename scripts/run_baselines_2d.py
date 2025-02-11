@@ -9,7 +9,7 @@ from baselines_2d import (
     cache_rejection_baseline,
 )
 from datasets import generate_data_points, get_accuracy
-from utils import catchtime, evaluate_chamfer_distance, plot_points, plot_two_intervals, plot_acceptance_ratios
+from utils_2d import catchtime, evaluate_chamfer_distance, plot_points, plot_two_intervals, plot_acceptance_ratios
 import wandb
 import numpy as np
 import hydra

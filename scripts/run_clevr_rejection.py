@@ -122,7 +122,7 @@ def main(cfg: DictConfig):
                config=OmegaConf.to_container(cfg, resolve=True),
                name=f"{cfg.experiment_name}",)
 
-    NUM_SAMPLES_TO_GENERATE = cfg.rejection.num_samples_to_generate
+    NUM_SAMPLES_TO_GENERATE = cfg.num_samples_to_generate
 
     packed_samples = th.zeros((5000, NUM_SAMPLES_TO_GENERATE, 3, 128, 128))
     packed_energies = th.zeros((5000, cfg.num_constraints, NUM_SAMPLES_TO_GENERATE))
@@ -141,7 +141,7 @@ def main(cfg: DictConfig):
                                     conditions_denoise_fn=conditions_denoise_fn[:-1],
                                     x_shape=(3, 128, 128),
                                     noise_scheduler=diffusion,
-                                    num_samples_to_generate=cfg.rejection.num_samples_to_generate,
+                                    num_samples_to_generate=cfg.num_samples_to_generate,
                                     rejection_scheduler_cfg=cfg.rejection_scheduler,
                                     elbo_cfg=cfg.elbo,
                                     progress=False,
