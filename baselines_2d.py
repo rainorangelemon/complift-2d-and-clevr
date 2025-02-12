@@ -82,12 +82,14 @@ def ebm_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], tor
     ha_step_size_scale = 0.03  # Base step size
     ha_step_sizes = torch.ones_like(noise_scheduler.betas) * ha_step_size_scale
 
+    @torch.no_grad()
     def gradient(x, t):
         scalar = 1 / noise_scheduler.sqrt_one_minus_alphas_cumprod
         eps = composed_denoise_fn(x, t)
         scale = scalar[t[0]]
         return -1 * scale * eps
 
+    @torch.no_grad()
     def gradient_cha(x, t):
         """Gradient function for MALA and HMC samplers"""
         scalar = 1 / noise_scheduler.sqrt_one_minus_alphas_cumprod
