@@ -1,3 +1,0 @@
-#!/bin/bash
-/home/rainorangelemon/micromamba/envs/robodiff/bin/python ddpm.py --experiment_name composition_product_1 --dataset composition_product_1 --input_embedding identity --hidden_layers 4 --num_epochs 1000 --mlp_type energy
-/home/rainorangelemon/micromamba/envs/robodiff/bin/python ddpm.py --experiment_name composition_product_2 --dataset composition_product_2 --input_embedding identity --hidden_layers 4 --num_epochs 1000 --mlp_type energy

@@ -15,6 +15,22 @@ from anneal_samplers import AnnealedUHASampler, AnnealedULASampler
 from utils_clevr import get_device
 
 
+# for more precise elbo estimation
+def disable_tf32(func):
+    def wrapper(*args, **kwargs):
+        old_tf32_cuda = torch.backends.cuda.matmul.allow_tf32
+        old_tf32_cudnn = torch.backends.cudnn.allow_tf32
+        try:
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
+            return func(*args, **kwargs)
+        finally:
+            torch.backends.cuda.matmul.allow_tf32 = old_tf32_cuda
+            torch.backends.cudnn.allow_tf32 = old_tf32_cudnn
+    return wrapper
+
+
+@disable_tf32
 def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                        diffusion: ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
                        x_shape: Tuple[int, ...],
@@ -66,6 +82,8 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
         samples.append(sample.cpu())
     return samples
 
+
+@disable_tf32
 def ebm_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                  x_shape: Tuple[int, ...],
                  noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
@@ -157,6 +175,7 @@ def create_intervene_timesteps(method: str,
         return list(range(0, timesteps_to_select))
 
 
+@disable_tf32
 def make_estimate_lift(elbo_cfg: dict[str, Union[bool, str]],
                             noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
                                                     ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
@@ -202,6 +221,7 @@ def make_estimate_lift(elbo_cfg: dict[str, Union[bool, str]],
     return estimate_lift
 
 
+@disable_tf32
 def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                                 unconditioned_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                                 conditions_denoise_fn: List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
@@ -244,13 +264,6 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
 
     def callback(x, t):
         if t[0] in rejection_timesteps:
-            # load x and energies from pt
-            x_and_energies = torch.load(f"x_and_energies_{t[0].item()}.pt")
-            x_another = x_and_energies["x"]
-            energies_another = x_and_energies["energies"]
-
-            import pdb; pdb.set_trace()
-
             unspaced_t = rejection_timesteps_unspaced[rejection_timesteps.index(t[0])]
             energies = [estimate_lift(denoise_fn, x,
                                           t=torch.full((len(x),), unspaced_t, dtype=torch.long, device=x.device))
@@ -272,6 +285,7 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
     return unfiltered_samples[-1][~need_to_remove], unfiltered_samples, need_to_remove_across_timesteps, energies_across_timesteps
 
 
+@disable_tf32
 def cache_rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                                 unconditioned_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                                 conditions_denoise_fn: List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
