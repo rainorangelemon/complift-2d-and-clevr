@@ -131,7 +131,7 @@ def main(cfg: DictConfig):
     pbar = tqdm(range(len(dataset)))
     for i in pbar:
         coords, _ = dataset[i]
-        img_path = os.path.join("../tiny-diffusion/", image_dir, f"sample_{i:05d}.png")
+        img_path = os.path.join(image_dir, f"sample_{i:05d}.png")
         img = Image.open(img_path)
         img = np.array(img)
         success, _, draw_labels = classifier.classify_image(img, coords)
@@ -139,7 +139,7 @@ def main(cfg: DictConfig):
         pbar.set_description(f"Success rate: {np.mean(successes):.3f}")
 
     # save the results under the same directory as the images
-    results_path = os.path.join("../tiny-diffusion/", image_dir, "results.npy")
+    results_path = os.path.join(image_dir, "results.npy")
     np.save(results_path, successes)
 
     print(f"Success rate: {np.mean(successes):.3f}")
