@@ -11,7 +11,7 @@ from copy import deepcopy
 import matplotlib.pyplot as plt
 import numpy as np
 
-import datasets
+import dataset_2d
 from positional_embeddings import PositionalEmbedding
 import wandb
 import os
@@ -368,7 +368,7 @@ if __name__ == "__main__":
     losses = []
     print("Training model...")
     for epoch in range(config.num_epochs):
-        dataset = datasets.get_dataset(config.dataset)
+        dataset = dataset_2d.get_dataset(config.dataset)
         dataloader = DataLoader(
             dataset, batch_size=config.train_batch_size, shuffle=True)
         model.train()

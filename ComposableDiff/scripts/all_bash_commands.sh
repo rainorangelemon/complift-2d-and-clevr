@@ -26,10 +26,8 @@ python -m scripts.image_sample_compose_clevr_rel $MODEL_FLAGS $DIFFUSION_FLAGS -
 python -m scripts.image_sample_compose_clevr_rel $MODEL_FLAGS $DIFFUSION_FLAGS --data_path './dataset/test_clevr_pos_5000_2.npz'
 python -m scripts.image_sample_compose_clevr_rel $MODEL_FLAGS $DIFFUSION_FLAGS --data_path './dataset/test_clevr_pos_5000_3.npz'
 
-# evaluate the model
+# evaluate the model using SAM2
 cd classifier
 python -m ComposableDiff.classifier.eval --dataset clevr_pos --checkpoint_dir ComposableDiff/models --im_size 128 --filter_dim 64  --npy_path ComposableDiff/dataset/test_clevr_pos_5000_1.npz  --generated_img_folder ComposableDiff/output/test_clevr_pos_5000_1 --mode generation
 python -m ComposableDiff.classifier.eval --dataset clevr_pos --checkpoint_dir ComposableDiff/models --im_size 128 --filter_dim 64  --npy_path ComposableDiff/dataset/test_clevr_pos_5000_2.npz  --generated_img_folder ComposableDiff/output/test_clevr_pos_5000_2 --mode generation
 python -m ComposableDiff.classifier.eval --dataset clevr_pos --checkpoint_dir ComposableDiff/models --im_size 128 --filter_dim 64  --npy_path ComposableDiff/dataset/test_clevr_pos_5000_3.npz  --generated_img_folder ComposableDiff/output/test_clevr_pos_5000_3 --mode generation
-
-
