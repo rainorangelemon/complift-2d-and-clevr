@@ -15,8 +15,9 @@ import enum
 
 
 class Method(str, enum.Enum):
-    REJECTION = "rejection"
-    CACHE_REJECTION = "cache_rejection"
+    DIFFUSION = "diffusion"
+    REJECTION = "complift"
+    CACHE_REJECTION = "cache_complift"
     EBM = "ebm"
 
 
@@ -90,6 +91,32 @@ def create_composed_model_fn(model: th.nn.Module, device: th.device, cfg: DictCo
         return th.cat([eps, rest], dim=1)
 
     return composed_model_fn
+
+
+def run_diffusion(model: th.nn.Module, diffusion: Any, dataset: CLEVRPosDataset,
+                 device: th.device, cfg: DictConfig, output_dir: Path) -> None:
+    """Run the standard diffusion sampling method."""
+    for test_idx in tqdm(range(len(dataset))):
+        th.manual_seed(0)
+        th.cuda.manual_seed(0)
+
+        labels, _ = dataset[test_idx]
+        composed_fn = create_composed_model_fn(model, device, cfg)
+        samples = baselines_clevr.diffusion_baseline(
+            denoise_fn=lambda x, t: composed_fn(x, t, th.from_numpy(labels).to(device)),
+            diffusion=diffusion,
+            x_shape=(3, 128, 128),
+            eval_batch_size=cfg.num_samples_to_generate,
+            progress=True,
+        )
+
+        # Save the final samples
+        final_samples = samples[-1]
+        for i in range(len(final_samples)):
+            sample = (final_samples[i] + 1) / 2
+            grid = make_grid(sample, nrow=1, padding=0)
+            os.makedirs(output_dir / f"trial_{i:02d}", exist_ok=True)
+            save_image(grid, output_dir / f"trial_{i:02d}/sample_{test_idx:05d}.png")
 
 
 def run_rejection(model: th.nn.Module, diffusion: Any, dataset: CLEVRPosDataset,
@@ -272,7 +299,9 @@ def main(cfg: DictConfig) -> None:
 
     # Run the selected method
     method = Method(cfg.method.lower())
-    if method == Method.REJECTION:
+    if method == Method.DIFFUSION:
+        run_diffusion(model, diffusion, dataset, device, cfg, output_dir)
+    elif method == Method.REJECTION:
         run_rejection(model, diffusion, dataset, device, cfg, output_dir)
     elif method == Method.CACHE_REJECTION:
         run_cache_rejection(model, diffusion, dataset, device, cfg, output_dir)
