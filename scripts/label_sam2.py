@@ -61,6 +61,14 @@ class SAMClassifier:
             input_points: The points to classify the image with, as a numpy array, range 0-1.
             return_anns: Whether to return the annotations.
         """
+
+        if isinstance(image, torch.Tensor):
+            image = image.cpu().numpy()
+            if image.min() < 0:
+                image = (image + 1) * 127.5
+            if image.shape[0] == 3:
+                image = image.transpose(1, 2, 0)
+
         anns = self.mask_generator.generate(image)
 
         input_points = np.array(input_points)
