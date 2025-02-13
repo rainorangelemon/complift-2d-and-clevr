@@ -67,7 +67,7 @@ class SAMClassifier:
             if image.min() < 0:
                 image = (image + 1) * 127.5
             if image.shape[0] == 3:
-                image = image.transpose(1, 2, 0)
+                image = image.transpose(1, 2, 0).astype(np.uint8)
 
         anns = self.mask_generator.generate(image)
 
