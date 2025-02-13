@@ -219,7 +219,7 @@ def run_cache_rejection(model: th.nn.Module, diffusion: Any, dataset: CLEVRPosDa
 def run_ebm(model: th.nn.Module, diffusion: Any, dataset: CLEVRPosDataset,
             device: th.device, cfg: DictConfig, output_dir: Path) -> None:
     """Run the EBM sampling method."""
-    for test_idx in tqdm(range(len(dataset))):
+    for test_idx in tqdm(range(100)):  # we here only sample 100 test cases to save time
         th.manual_seed(0)
         th.cuda.manual_seed(0)
 
