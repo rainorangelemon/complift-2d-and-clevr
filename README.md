@@ -40,13 +40,15 @@ pip install -r requirements.txt
 
 ### 2D Point Generation
 
-Check the QuickStart notebook: [Colab](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing), [Local](./notebooks/2d.ipynb)
+📓 QuickStart Notebook: [Colab](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing), [Local](./notebooks/2d.ipynb)
 
 ```python
 python 2d_and_clevr/scripts/run_baselines_2d.py
 ```
 
-### CLEVR Position Tasks &nbsp;&nbsp; [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing)
+### CLEVR Position Tasks
+
+📓 QuickStart Notebook: [Colab](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing), [Local](./notebooks/clevr.ipynb)
 
 ```python
 python 2d_and_clevr/scripts/run_baselines_clevr.py --data_path [path_to_clevr_pos_data]
@@ -66,10 +68,6 @@ The implementation uses a UNet-based architecture with the following key compone
 ### CLEVR Position Dataset
 - Coordinates labels for object positions
 - Format: `(x, y)` coordinates for each object
-
-### CLEVR Relation Dataset
-- Object attributes: color, shape, material, size
-- Supported relations: left, right, front, behind, above, below
 
 ## References
 
