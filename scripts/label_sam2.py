@@ -8,6 +8,7 @@ from omegaconf import DictConfig, OmegaConf
 import hydra
 from tqdm.auto import tqdm
 from typing import Tuple
+from hydra import initialize, compose
 
 class SAMClassifier:
     def __init__(self, device):
@@ -33,19 +34,21 @@ class SAMClassifier:
         from hydra.core.global_hydra import GlobalHydra
         GlobalHydra.instance().clear()
 
-        current_dir = os.getcwd()
-        os.chdir("../sam2")
+        # Initialize Hydra with the config directory
+        initialize(version_base=None, config_path="../../sam2/sam2/")
 
         from sam2.build_sam import build_sam2
         from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
-        sam2_checkpoint = "checkpoints/sam2.1_hiera_large.pt"
+        # get the absolute path of the current file
+        current_file_path = os.path.abspath(__file__)
+        # get the absolute path of the sam2 directory
+        sam2_dir = os.path.dirname(current_file_path)
+        sam2_checkpoint = os.path.join(sam2_dir, "../../sam2/checkpoints/sam2.1_hiera_large.pt")
         model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
         self.sam2 = build_sam2(model_cfg, sam2_checkpoint, device=self.device, apply_postprocessing=False)
         self.mask_generator = SAM2AutomaticMaskGenerator(self.sam2)
-
-        os.chdir(current_dir)
 
     def classify_image(self,
                        image: np.ndarray,
