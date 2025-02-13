@@ -31,6 +31,7 @@ def disable_tf32(func):
 
 
 @disable_tf32
+@torch.autocast("cuda", enabled=False)
 def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                        diffusion: ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
                        x_shape: Tuple[int, ...],
@@ -84,6 +85,7 @@ def diffusion_baseline(denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.
 
 
 @disable_tf32
+@torch.autocast("cuda", enabled=False)
 def ebm_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                  x_shape: Tuple[int, ...],
                  noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
@@ -176,6 +178,7 @@ def create_intervene_timesteps(method: str,
 
 
 @disable_tf32
+@torch.autocast("cuda", enabled=False)
 def make_estimate_lift(elbo_cfg: dict[str, Union[bool, str]],
                             noise_scheduler: Union[ComposableDiff.composable_diffusion.gaussian_diffusion.GaussianDiffusion,
                                                     ComposableDiff.composable_diffusion.respace.SpacedDiffusion],
@@ -222,6 +225,7 @@ def make_estimate_lift(elbo_cfg: dict[str, Union[bool, str]],
 
 
 @disable_tf32
+@torch.autocast("cuda", enabled=False)
 def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                                 unconditioned_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                                 conditions_denoise_fn: List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
@@ -286,6 +290,7 @@ def rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor
 
 
 @disable_tf32
+@torch.autocast("cuda", enabled=False)
 def cache_rejection_baseline(composed_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                                 unconditioned_denoise_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
                                 conditions_denoise_fn: List[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
