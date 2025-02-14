@@ -1,5 +1,21 @@
 # CompLift for 2D and CLEVR Tasks &nbsp;&nbsp; [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing)
 
+
+<table width="100%">
+<tr>
+<th> 🎨 2D Synthetic Dataset </th>
+<th> 🎯 CLEVR Position Tasks </th>
+</tr>
+<tr>
+<td width="67%" align="center">
+<img src="figures/2d_overall.png" width="100%"/>
+</td>
+<td width="33%" align="center">
+<img src="figures/clevr_example.png" width="100%"/>
+</td>
+</tr>
+</table>
+
 The official PyTorch implementation of *Improving Compositional Generation with Diffusion Models Using Lift Scores* for 2D and CLEVR tasks. For text-to-image generation, please refer to [complift-t2i](https://github.com/rainorangelemon/compLift-t2i).
 
 ## 📓 Quickstart
@@ -7,7 +23,7 @@ The official PyTorch implementation of *Improving Compositional Generation with 
 - 2D synthetic task: Train a diffusion model and sample with CompLift with [notebooks/2d.ipynb](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing).
 - CLEVR position task: Load a pretrained diffusion model and sample with CompLift with [notebooks/clevr.ipynb](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing).
 
-## Installation
+## 🛠️ Installation
 
 We recommend using conda to install the environment.
 
@@ -32,15 +48,19 @@ pip install -e .
 cd ../2d-and-clevr
 ```
 
-## Usage
+## 🚀 Usage
 
 Make sure you are at the `2d-and-clevr` directory to run the following commands.
 
-### 2D Synthetic Dataset
+### 🎨 2D Synthetic Dataset
 
-Getting familiar with Quickstart notebook [notebooks/2d.ipynb](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing) first is recommended.
+#### Quickstart
 
-#### 1. Train Diffusion Models
+Getting familiar with Quickstart notebook [notebooks/2d.ipynb](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing) first is recommended. It includes:
+- Train the diffusion model
+- Generate samples with different baselines
+
+#### 1. Train Diffusion Models for All Environments
 
 This following command roughly takes 72 minutes to train all the models for 12 different distributions on a 4090 GPU.
 
@@ -57,9 +77,15 @@ python -m scripts.run_baselines_2d
 ```
 The results will be shown in WandB, as well as saved in `runs/baselines_2d/`.
 
-### CLEVR Position Tasks
+### 🎯 CLEVR Position Tasks
 
-Getting familiar with Quickstart notebook [notebooks/clevr.ipynb](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing) first is recommended.
+#### Quickstart
+
+Getting familiar with Quickstart notebook [notebooks/clevr.ipynb](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing) first is recommended. It includes:
+- Download the pretrained diffusion model and dataset
+- Load the pretrained diffusion model
+- Generate samples with different baselines
+- Evaluate the samples using SAM2
 
 #### 1. Generate Samples
 
@@ -78,14 +104,14 @@ python -m scripts.label_sam2 num_constraints=NUM_CONSTRAINTS +image_dir=runs/MM-
 ```
 Replace `runs/MM-DD-YY_HH-MM-SS_YOUR_EXPERIMENT_NAME` with the path to the directory containing the images you want to evaluate.
 
-## Citation
+## 📝 Citation
 
 If you find this work useful in your research, please feel free to cite:
 
 ```bibtex
 ```
 
-## References
+## 📚 References
 
 * tanelp's [tiny diffusion](https://github.com/tanelp/tiny-diffusion)
 * Meta's [SAM2](https://github.com/facebookresearch/sam2)
