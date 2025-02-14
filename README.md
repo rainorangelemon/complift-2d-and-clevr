@@ -16,7 +16,7 @@
 </tr>
 </table>
 
-The official PyTorch implementation of *Improving Compositional Generation with Diffusion Models Using Lift Scores* for 2D and CLEVR tasks. For text-to-image generation, please refer to [complift-t2i](https://github.com/rainorangelemon/compLift-t2i).
+The official PyTorch implementation of *Improving Compositional Generation with Diffusion Models Using Lift Scores* for 2D and CLEVR tasks. For text-to-image generation, please refer to [complift-t2i](https://github.com/rainorangelemon/complift-t2i).
 
 ## 📓 Quickstart
 
