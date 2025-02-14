@@ -17,7 +17,7 @@ import enum
 class Method(str, enum.Enum):
     DIFFUSION = "diffusion"
     REJECTION = "complift"
-    CACHE_REJECTION = "cache_complift"
+    CACHE_REJECTION = "cached_complift"
     EBM = "ebm"
 
 
@@ -278,8 +278,6 @@ def main(cfg: DictConfig) -> None:
 
     # Setup output directory
     output_dir = Path(cfg.output_dir)
-    experiment_name = cfg.data_path.split('/')[-1].split('.')[0]
-    output_dir = output_dir / experiment_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Save config

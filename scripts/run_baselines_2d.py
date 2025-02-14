@@ -8,7 +8,7 @@ from baselines_2d import (
     rejection_baseline,
     cache_rejection_baseline,
 )
-from datasets import generate_data_points, get_accuracy
+from dataset_2d import generate_data_points, get_accuracy
 from utils_2d import catchtime, evaluate_chamfer_distance, plot_points, plot_two_intervals, plot_acceptance_ratios
 import wandb
 import numpy as np

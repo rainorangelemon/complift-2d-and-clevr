@@ -1,80 +1,97 @@
 # CompLift for 2D and CLEVR Tasks &nbsp;&nbsp; [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing)
 
-The official PyTorch implementation of *Improving Compositional Generation with Diffusion Models Using Lift Scores*.
+The official PyTorch implementation of *Improving Compositional Generation with Diffusion Models Using Lift Scores* for 2D and CLEVR tasks. For text-to-image generation, please refer to [complift-t2i](https://github.com/rainorangelemon/compLift-t2i).
 
-## Overview
+## 📓 Quickstart
 
-CompLift is a novel approach that improves compositional generation in diffusion models by using lift scores. The project focuses on two main tasks:
-
-1. **2D Point Generation**: Generating 2D points with specific spatial relationships.
-2. **CLEVR Object Generation**: Generating CLEVR-style images with objects having specific spatial positions.
-
-## Features
-
-- Implementation of CompLift scoring mechanism for improved compositional generation
-- Support for both standard and cached CompLift variants
-- Integration with Composable Diffusion models
-- Evaluation tools for measuring generation quality
-- Support for various spatial relationships and object attributes in CLEVR
-- Configurable sampling and generation parameters
+- 2D synthetic task: Train a diffusion model and sample with CompLift with [notebooks/2d.ipynb](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing).
+- CLEVR position task: Load a pretrained diffusion model and sample with CompLift with [notebooks/clevr.ipynb](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing).
 
 ## Installation
+
+We recommend using conda to install the environment.
 
 ```bash
 # Make parent directory
 mkdir complift
 cd complift
 
+# Clone the repository
+git clone https://github.com/rainorangelemon/complift-2d-and-clevr.git 2d-and-clevr
+conda env create -f 2d-and-clevr/environment.yaml
+
+# Activate the environment
+conda activate complift
+
 # Install SAM2, check the SAM2 repo for more details
 # NOTE: this is only required to run the CLEVR tasks
 git clone https://github.com/facebookresearch/sam2.git && cd sam2
 pip install -e .
 
-# # Clone the repository
-git clone https://github.com/rainorangelemon/complift-2d-and-clevr.git 2d-and-clevr
-cd 2d-and-clevr
-pip install -r requirements.txt
+# Go back to the 2d-and-clevr directory
+cd ../2d-and-clevr
 ```
 
 ## Usage
 
-### 2D Point Generation
+Make sure you are at the `2d-and-clevr` directory to run the following commands.
 
-📓 QuickStart Notebook: [Colab](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing), [Local](./notebooks/2d.ipynb)
+### 2D Synthetic Dataset
+
+Getting familiar with Quickstart notebook [notebooks/2d.ipynb](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing) first is recommended.
+
+#### 1. Train Diffusion Models
+
+This following command roughly takes 72 minutes to train all the models for 12 different distributions on a 4090 GPU.
+
+```bash
+bash scripts/train_2d.sh
+```
+
+#### 2. Evaluate Baselines
+
+The following command will evaluate the baselines on all 9 environments, roughly takes 7 minutes on a 4090 GPU.
 
 ```python
-python 2d_and_clevr/scripts/run_baselines_2d.py
+python -m scripts.run_baselines_2d
 ```
+The results will be shown in WandB, as well as saved in `runs/baselines_2d/`.
 
 ### CLEVR Position Tasks
 
-📓 QuickStart Notebook: [Colab](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing), [Local](./notebooks/clevr.ipynb)
+Getting familiar with Quickstart notebook [notebooks/clevr.ipynb](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing) first is recommended.
+
+#### 1. Generate Samples
 
 ```python
-python 2d_and_clevr/scripts/run_baselines_clevr.py --data_path [path_to_clevr_pos_data]
+python -m scripts.run_baselines_clevr +method=METHOD experiment_name=YOUR_EXPERIMENT_NAME num_constraints=NUM_CONSTRAINTS num_samples_to_generate=NUM_SAMPLES_TO_GENERATE
 ```
+- `METHOD` can be `diffusion`, `complift`, `cached_complift`, or `ebm`
+- `YOUR_EXPERIMENT_NAME` is the name of your experiment, images will be saved in `runs/MM-DD-YY_HH-MM-SS_YOUR_EXPERIMENT_NAME`
+- `NUM_CONSTRAINTS` is the number of object positions to satisfy, choose between 1, 2, 3, 4, 5
+- `NUM_SAMPLES_TO_GENERATE` is the number of original samples to generate for each set of constraints, we use 10 in the paper
 
-## Model Architecture
+#### 2. Evaluate Samples using SAM2
 
-The implementation uses a UNet-based architecture with the following key components:
+```python
+python -m scripts.label_sam2 num_constraints=NUM_CONSTRAINTS +image_dir=runs/MM-DD-YY_HH-MM-SS_YOUR_EXPERIMENT_NAME
+```
+Replace `runs/MM-DD-YY_HH-MM-SS_YOUR_EXPERIMENT_NAME` with the path to the directory containing the images you want to evaluate.
 
-- Conditional diffusion model for compositional generation
-- Lift score computation for improved sampling
-- Support for both position-based and relation-based conditions
-- Cached scoring mechanism for efficient generation
+## Citation
 
-## Data Format
+If you find this work useful in your research, please feel free to cite:
 
-### CLEVR Position Dataset
-- Coordinates labels for object positions
-- Format: `(x, y)` coordinates for each object
+```bibtex
+```
 
 ## References
 
 * tanelp's [tiny diffusion](https://github.com/tanelp/tiny-diffusion)
 * Meta's [SAM2](https://github.com/facebookresearch/sam2)
+* Du et al.'s [MCMC for Diffusion Models](https://github.com/yilundu/reduce_reuse_recycle)
+* Liu et al.'s [Composable Diffusion](https://github.com/energy-based-model/Compositional-Visual-Generation-with-Composable-Diffusion-Models-PyTorch)
 * HuggingFace's [diffusers](https://github.com/huggingface/diffusers) library
 * lucidrains' [DDPM implementation in PyTorch](https://github.com/lucidrains/denoising-diffusion-pytorch)
 * Jonathan Ho's [implementation of DDPM](https://github.com/hojonathanho/diffusion)
 * InFoCusp's [DDPM implementation in tf](https://github.com/InFoCusp/diffusion_models)
-

@@ -11,7 +11,6 @@ from ComposableDiff.composable_diffusion.text2im_model import (
 )
 
 from ComposableDiff.composable_diffusion.unet import UNetModel, SuperResUNetModel
-from ComposableDiff.composable_diffusion.tokenizer.bpe import get_encoder
 
 
 def model_and_diffusion_defaults():
@@ -200,37 +199,7 @@ def create_model(
             dataset=dataset
         )
     else:
-        if inpaint and super_res:
-            model_cls = SuperResInpaintText2ImUnet
-        elif inpaint:
-            model_cls = InpaintText2ImUNet
-        elif super_res:
-            model_cls = SuperResText2ImUNet
-        else:
-            model_cls = Text2ImUNet
-        return model_cls(
-            text_ctx=text_ctx,
-            xf_width=xf_width,
-            xf_layers=xf_layers,
-            xf_heads=xf_heads,
-            xf_final_ln=xf_final_ln,
-            tokenizer=get_encoder(),
-            xf_padding=xf_padding,
-            in_channels=3,
-            model_channels=num_channels,
-            out_channels=6,
-            num_res_blocks=num_res_blocks,
-            attention_resolutions=tuple(attention_ds),
-            dropout=dropout,
-            channel_mult=channel_mult,
-            use_fp16=use_fp16,
-            num_heads=num_heads,
-            num_head_channels=num_head_channels,
-            num_heads_upsample=num_heads_upsample,
-            use_scale_shift_norm=use_scale_shift_norm,
-            resblock_updown=resblock_updown,
-            cache_text_emb=cache_text_emb,
-        )
+        raise NotImplementedError("Not implemented for other architectures")
 
 
 def create_gaussian_diffusion(
