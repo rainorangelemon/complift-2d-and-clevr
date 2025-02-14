@@ -20,8 +20,8 @@ The official PyTorch implementation of *Improving Compositional Generation with 
 
 ## 📓 Quickstart
 
-- 2D synthetic task: Train a diffusion model and sample with CompLift with [notebooks/2d.ipynb](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing).
-- CLEVR position task: Load a pretrained diffusion model and sample with CompLift with [notebooks/clevr.ipynb](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing).
+- 2D synthetic task: Train a diffusion model and sample with CompLift with `notebooks/2d.ipynb` ([Colab](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing))
+- CLEVR position task: Load a pretrained diffusion model and sample with CompLift with `notebooks/clevr.ipynb` ([Colab](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing))
 
 ## 🛠️ Installation
 
@@ -48,13 +48,13 @@ pip install -e .
 cd ../2d-and-clevr
 ```
 
-## 🎨 2D Synthetic Dataset
+## 🎨 2D Synthetic Dataset &nbsp;&nbsp; [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing)
 
 Make sure you are at the `2d-and-clevr` directory to run the following commands.
 
 ### Quickstart
 
-Getting familiar with Quickstart notebook [notebooks/2d.ipynb](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing) first is recommended. It includes:
+Getting familiar with Quickstart notebook [notebooks/2d.ipynb](notebooks/2d.ipynb) first is recommended. It includes:
 - Train the diffusion model
 - Generate samples with different baselines
 
@@ -75,13 +75,13 @@ python -m scripts.run_baselines_2d
 ```
 The results will be shown in WandB, as well as saved in `runs/baselines_2d/`.
 
-## 🎯 CLEVR Position Tasks
+## 🎯 CLEVR Position Tasks &nbsp;&nbsp; [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing)
 
 Make sure you are at the `2d-and-clevr` directory to run the following commands.
 
 ### Quickstart
 
-Getting familiar with Quickstart notebook [notebooks/clevr.ipynb](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing) first is recommended. It includes:
+Getting familiar with Quickstart notebook [notebooks/clevr.ipynb](notebooks/clevr.ipynb) first is recommended. It includes:
 - Download the pretrained diffusion model and dataset
 - Load the pretrained diffusion model
 - Generate samples with different baselines

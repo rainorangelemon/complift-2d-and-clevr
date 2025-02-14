@@ -95,7 +95,7 @@ def create_composed_model_fn(model: th.nn.Module, device: th.device, cfg: DictCo
 
 def run_diffusion(model: th.nn.Module, diffusion: Any, dataset: CLEVRPosDataset,
                  device: th.device, cfg: DictConfig, output_dir: Path) -> None:
-    """Run the standard diffusion sampling method."""
+    """Run the composable diffusion sampling method."""
     for test_idx in tqdm(range(len(dataset))):
         th.manual_seed(0)
         th.cuda.manual_seed(0)
@@ -107,16 +107,20 @@ def run_diffusion(model: th.nn.Module, diffusion: Any, dataset: CLEVRPosDataset,
             diffusion=diffusion,
             x_shape=(3, 128, 128),
             eval_batch_size=cfg.num_samples_to_generate,
-            progress=True,
+            progress=False,
         )
 
         # Save the final samples
         final_samples = samples[-1]
+        random_idx = np.random.randint(0, len(final_samples))
         for i in range(len(final_samples)):
             sample = (final_samples[i] + 1) / 2
             grid = make_grid(sample, nrow=1, padding=0)
             os.makedirs(output_dir / f"trial_{i:02d}", exist_ok=True)
             save_image(grid, output_dir / f"trial_{i:02d}/sample_{test_idx:05d}.png")
+
+            if i == random_idx:
+                save_image(grid, output_dir / f"sample_{test_idx:05d}.png")
 
 
 def run_rejection(model: th.nn.Module, diffusion: Any, dataset: CLEVRPosDataset,
@@ -234,12 +238,16 @@ def run_ebm(model: th.nn.Module, diffusion: Any, dataset: CLEVRPosDataset,
             progress=True,
         )
 
+        random_idx = np.random.randint(0, len(samples[-1]))
         for i in range(len(samples[-1])):
             sample_at_final_t = samples[-1][i]
             sample_at_final_t = (sample_at_final_t + 1) / 2
             grid = make_grid(sample_at_final_t, nrow=1, padding=0)
             os.makedirs(output_dir / f"trial_{i:02d}", exist_ok=True)
             save_image(grid, output_dir / f"trial_{i:02d}/sample_{test_idx:05d}.png")
+
+            if i == random_idx:
+                save_image(grid, output_dir / f"sample_{test_idx:05d}.png")
 
 
 def save_packed_results(packed_samples: th.Tensor, packed_energies: th.Tensor, output_dir: Path) -> None:
