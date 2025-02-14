@@ -48,19 +48,17 @@ pip install -e .
 cd ../2d-and-clevr
 ```
 
-## 🚀 Usage
+## 🎨 2D Synthetic Dataset
 
 Make sure you are at the `2d-and-clevr` directory to run the following commands.
 
-### 🎨 2D Synthetic Dataset
-
-#### Quickstart
+### Quickstart
 
 Getting familiar with Quickstart notebook [notebooks/2d.ipynb](https://colab.research.google.com/drive/1bVjGY-ym67CV8FiUxxkaMpbkWg9EQGcd?usp=sharing) first is recommended. It includes:
 - Train the diffusion model
 - Generate samples with different baselines
 
-#### 1. Train Diffusion Models for All Environments
+### 1. Train Diffusion Models for All Environments
 
 This following command roughly takes 72 minutes to train all the models for 12 different distributions on a 4090 GPU.
 
@@ -68,7 +66,7 @@ This following command roughly takes 72 minutes to train all the models for 12 d
 bash scripts/train_2d.sh
 ```
 
-#### 2. Evaluate Baselines
+### 2. Evaluate Baselines
 
 The following command will evaluate the baselines on all 9 environments, roughly takes 7 minutes on a 4090 GPU.
 
@@ -77,9 +75,11 @@ python -m scripts.run_baselines_2d
 ```
 The results will be shown in WandB, as well as saved in `runs/baselines_2d/`.
 
-### 🎯 CLEVR Position Tasks
+## 🎯 CLEVR Position Tasks
 
-#### Quickstart
+Make sure you are at the `2d-and-clevr` directory to run the following commands.
+
+### Quickstart
 
 Getting familiar with Quickstart notebook [notebooks/clevr.ipynb](https://colab.research.google.com/drive/1JPm_N8NThABc5jZmgiTB4RWnNUkKp491?usp=sharing) first is recommended. It includes:
 - Download the pretrained diffusion model and dataset
@@ -87,7 +87,7 @@ Getting familiar with Quickstart notebook [notebooks/clevr.ipynb](https://colab.
 - Generate samples with different baselines
 - Evaluate the samples using SAM2
 
-#### 1. Generate Samples
+### 1. Generate Samples
 
 ```python
 python -m scripts.run_baselines_clevr +method=METHOD experiment_name=YOUR_EXPERIMENT_NAME num_constraints=NUM_CONSTRAINTS num_samples_to_generate=NUM_SAMPLES_TO_GENERATE
@@ -97,7 +97,7 @@ python -m scripts.run_baselines_clevr +method=METHOD experiment_name=YOUR_EXPERI
 - `NUM_CONSTRAINTS` is the number of object positions to satisfy, choose between 1, 2, 3, 4, 5
 - `NUM_SAMPLES_TO_GENERATE` is the number of original samples to generate for each set of constraints, we use 10 in the paper
 
-#### 2. Evaluate Samples using SAM2
+### 2. Evaluate Samples using SAM2
 
 ```python
 python -m scripts.label_sam2 num_constraints=NUM_CONSTRAINTS +image_dir=runs/MM-DD-YY_HH-MM-SS_YOUR_EXPERIMENT_NAME
